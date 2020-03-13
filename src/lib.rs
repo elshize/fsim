@@ -47,6 +47,9 @@ pub mod config;
 pub use config::Config;
 use config::TimeUnit;
 
+mod status;
+pub use status::Status;
+
 /// Generates a newtype ID from `usize`.
 macro_rules! id {
     ($x:ident) => {
@@ -181,9 +184,15 @@ pub enum Effect<'a> {
         /// Callback to call on query.
         callback: queue::ProcessCallback<'a, (Query, ShardId), Process>,
     },
-    //Aggregate {
-    //    //
-    //},
+    /// Aggregate partial results of a query, coming from a shard node.
+    Aggregate {
+        /// Time to wait before scheduling aggregator.
+        timeout: Duration,
+        /// Queryt to aggregate.
+        query: Query,
+        /// Node where partial results are coming from.
+        node: NodeId,
+    },
 }
 
 macro_rules! push_query {
@@ -200,6 +209,9 @@ macro_rules! push_query {
             if let Some(resumed) = resumed {
                 $s.schedule_now(resumed);
             }
+            true
+        } else {
+            false
         }
     };
 }
@@ -235,7 +247,8 @@ pub struct QueryRoutingSimulation<'a> {
     broker: Broker<'a>,
     query_data: Rc<Vec<config::Query>>,
     time_unit: TimeUnit,
-    query_log: Vec<QueryStatus>,
+    //query_log: Vec<QueryStatus>,
+    status: Status,
 }
 
 fn duration_constructor(unit: TimeUnit) -> Box<dyn Fn(u64) -> Duration> {
@@ -275,7 +288,8 @@ impl<'a> QueryRoutingSimulation<'a> {
             ),
             query_data: Rc::from(queries),
             time_unit: config.time_unit,
-            query_log: Vec::new(),
+            //query_log: Vec::new(),
+            status: Status::default(),
         };
         let nodes = sim.set_up_nodes(&config);
         for NodeEntry {
@@ -319,30 +333,23 @@ impl<'a> QueryRoutingSimulation<'a> {
         self.schedule(Duration::from_secs(0), process)
     }
 
-    fn query_state(&mut self, query: &Query) -> &mut QueryStatus {
-        self.query_log
-            .get_mut(usize::from(query.request))
-            .expect("Request ID out of bounds")
-    }
-
     /// Advance the simulation
     pub fn advance(&mut self) {
         use Effect::*;
-        use Process::*;
         if let Some(Reverse(Event { time, process })) = self.scheduled_events.pop() {
             if self.time < time {
                 log::info!("Elapsed {:?}", time);
             }
             self.time = time;
             let effect = match process {
-                QueryGenerator(stage) => self.query_generator.run(stage),
-                Broker(stage) => {
-                    if let BrokerStage::Route(query) = &stage {
-                        self.query_state(query).pick_up(time);
+                Process::QueryGenerator(stage) => self.query_generator.run(stage),
+                Process::Broker(stage) => {
+                    if let &BrokerStage::Route(query) = &stage {
+                        self.status.pick_up_query(query, time);
                     }
                     self.broker.run(stage)
                 }
-                Node { id, stage } => self
+                Process::Node { id, stage } => self
                     .nodes
                     .get(usize::from(id))
                     .expect("Node ID out of bounds")
@@ -359,7 +366,7 @@ impl<'a> QueryRoutingSimulation<'a> {
                     }
                 }
                 QueryQueuePut(query, process) => {
-                    self.query_log.push(QueryStatus::new(self.time));
+                    self.status.enter_query(query, time);
                     push_query!(self, self.incoming_queries, query, process);
                 }
                 QueryQueueGet(callback) => {
@@ -370,21 +377,17 @@ impl<'a> QueryRoutingSimulation<'a> {
                     query,
                     nodes,
                 } => {
-                    self.schedule(timeout, Broker(BrokerStage::GetQuery));
-                    self.query_state(&query).dispatch(time, nodes.len());
+                    self.schedule(timeout, Process::Broker(BrokerStage::GetQuery));
+                    self.status.dispatch_query(query, time, nodes.len());
                     for NodeRequest { id, shard } in nodes {
-                        //trace!(
-                        //    "Routing query {} to node {} for shard {}",
-                        //    query.id(),
-                        //    id,
-                        //    shard
-                        //);
                         let queue = &mut self
                             .nodes
                             .get_mut(usize::from(id))
                             .expect("Node ID out of bounds")
                             .entry_queue;
-                        push_query!(self, queue, (query, shard));
+                        if !push_query!(self, queue, (query, shard)) {
+                            //
+                        }
                     }
                 }
                 NodeQueryGet { node, callback } => {
@@ -395,6 +398,20 @@ impl<'a> QueryRoutingSimulation<'a> {
                             .expect("Node ID out of bounds")
                             .entry_queue,
                         callback
+                    );
+                }
+                Aggregate {
+                    timeout,
+                    query,
+                    node,
+                } => {
+                    self.status.finish_shard(query, time);
+                    self.schedule(
+                        timeout,
+                        Process::Node {
+                            id: node,
+                            stage: NodeStage::GetQuery,
+                        },
                     );
                 }
             }

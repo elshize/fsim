@@ -227,6 +227,57 @@ mod test {
     }
 
     #[test]
+    fn test_push_or_drop_on_empty() {
+        let mut queue = MockQueue::new();
+        assert_eq!(queue.push_or_drop('a'), Pushed { resumed: None });
+        assert_eq!(queue.elements, VecDeque::from(vec!['a']));
+        assert!(queue.waiting_to_pop.is_empty());
+    }
+
+    #[test]
+    fn test_push_or_drop_on_non_empty() {
+        let mut queue = MockQueue {
+            elements: VecDeque::from(vec!['a', 'b', 'c']),
+            ..Default::default()
+        };
+        assert_eq!(queue.push_or_drop('z'), Pushed { resumed: None });
+        assert_eq!(queue.elements, VecDeque::from(vec!['a', 'b', 'c', 'z']));
+        assert!(queue.waiting_to_pop.is_empty());
+    }
+
+    #[test]
+    fn test_push_or_drop_on_full() {
+        let mut queue = MockQueue {
+            elements: VecDeque::from(vec!['a', 'b', 'c']),
+            capacity: 3,
+            ..Default::default()
+        };
+        assert_eq!(queue.push_or_drop('z'), Full);
+        assert_eq!(queue.elements, VecDeque::from(vec!['a', 'b', 'c']));
+        assert!(queue.waiting_to_pop.is_empty());
+    }
+
+    #[test]
+    fn test_push_or_drop_and_wake() {
+        let mut queue = MockQueue {
+            elements: VecDeque::from(vec!['a', 'b']),
+            waiting_to_pop: VecDeque::from(vec![ProcessCallback::new(|e: char| {
+                MockProcess::WithValue(123, e)
+            })]),
+            capacity: 3,
+            ..Default::default()
+        };
+        assert_eq!(
+            queue.push_or_drop('c'),
+            Pushed {
+                resumed: Some(MockProcess::WithValue(123, 'a'))
+            }
+        );
+        assert_eq!(queue.elements, VecDeque::from(vec!['b', 'c']));
+        assert!(queue.waiting_to_pop.is_empty());
+    }
+
+    #[test]
     fn test_pop_on_non_empty() {
         let mut queue = MockQueue {
             elements: VecDeque::from(vec!['a', 'b', 'c']),
