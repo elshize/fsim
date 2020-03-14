@@ -10,6 +10,7 @@
 #![warn(clippy::all, clippy::pedantic)]
 #![allow(clippy::module_name_repetitions, clippy::default_trait_access)]
 
+use id_derive::Id;
 use rand::distributions::Uniform;
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaChaRng;
@@ -50,38 +51,21 @@ use config::TimeUnit;
 mod status;
 pub use status::Status;
 
-/// Generates a newtype ID from `usize`.
-macro_rules! id {
-    ($x:ident) => {
-        /// Identifier
-        #[derive(Debug, Deserialize, Serialize, Eq, PartialEq, Ord, PartialOrd, Clone, Copy)]
-        pub struct $x(pub usize);
+/// Shard ID.
+#[derive(Id, Debug, PartialEq, PartialOrd, Eq, Ord, Serialize, Deserialize, Copy, Clone)]
+pub struct ShardId(usize);
 
-        impl $x {
-            /// Constructs a new shard ID.
-            pub fn new(id: usize) -> Self {
-                Self(id)
-            }
-        }
+/// Node ID.
+#[derive(Id, Debug, PartialEq, PartialOrd, Eq, Ord, Serialize, Deserialize, Copy, Clone)]
+pub struct NodeId(usize);
 
-        impl std::fmt::Display for $x {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "{}", self.0)
-            }
-        }
+/// Query ID.
+#[derive(Id, Debug, PartialEq, PartialOrd, Eq, Ord, Serialize, Deserialize, Copy, Clone)]
+pub struct QueryId(usize);
 
-        impl From<$x> for usize {
-            fn from(id: $x) -> usize {
-                id.0
-            }
-        }
-    };
-}
-
-id!(ShardId);
-id!(NodeId);
-id!(QueryId);
-id!(RequestId);
+/// Query request ID.
+#[derive(Id, Debug, PartialEq, PartialOrd, Eq, Ord, Serialize, Deserialize, Copy, Clone)]
+pub struct RequestId(usize);
 
 #[derive(Debug, PartialEq, PartialOrd, Eq, Ord, Serialize, Deserialize, Copy, Clone)]
 /// Replica is identified by a node and a shard.
@@ -274,7 +258,7 @@ impl<'a> QueryRoutingSimulation<'a> {
             nodes: vec![],
             time: Duration::from_secs(0),
             query_generator: QueryGenerator::new(
-                (0..queries.len()).map(QueryId::new).collect(),
+                (0..queries.len()).map(QueryId::from).collect(),
                 ChaChaRng::seed_from_u64(seeder.next_u64()),
                 Normal::new(f32::from(config.query_interval), 1.0).unwrap(),
                 query_selection_dist,

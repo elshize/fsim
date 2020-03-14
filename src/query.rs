@@ -116,26 +116,35 @@ impl QueryStatus {
         }
     }
 
+    /// Returns the time at which the query was finished.
+    pub fn num_dropped(&self) -> usize {
+        use QueryStatus::*;
+        match self {
+            New(_) | PickedUp(_) => 0,
+            Dispatched(DispatchedQueryStatus { num_dropped, .. })
+            | Finished(FinishedQueryStatus { num_dropped, .. }) => *num_dropped,
+        }
+    }
+
     /// Returns `true` if the query is in state `Finished`.
     pub fn is_finished(&self) -> bool {
         matches!(self, QueryStatus::Finished(_))
     }
 
     /// Records the fact that the query was picked up by a broker at `time`.
-    pub fn pick_up(&mut self, time: Duration) -> &mut Self {
+    pub fn pick_up(&self, time: Duration) -> Self {
         match self {
             Self::New(entry) => {
                 assert!(
                     *entry <= time,
                     "Entry time ({:?}) must be at or before pick up time ({:?})",
-                    *entry,
+                    entry,
                     time
                 );
-                *self = Self::PickedUp(PickedUpQueryStatus {
+                Self::PickedUp(PickedUpQueryStatus {
                     entry: *entry,
                     broker: time,
-                });
-                self
+                })
             }
             _ => panic!("Query in invalid state"),
         }
@@ -143,24 +152,23 @@ impl QueryStatus {
 
     /// Records the fact that the query was dispatched by a broker at `time` to `num_shards`
     /// shards.
-    pub fn dispatch(&mut self, time: Duration, num_shards: usize) -> &mut Self {
+    pub fn dispatch(&self, time: Duration, num_shards: usize) -> Self {
         match self {
             Self::PickedUp(PickedUpQueryStatus { entry, broker }) => {
                 assert!(
                     *broker <= time,
                     "Pick-up time ({:?}) must be at or before dispatch time ({:?})",
-                    *broker,
+                    broker,
                     time
                 );
-                *self = Self::Dispatched(DispatchedQueryStatus {
+                Self::Dispatched(DispatchedQueryStatus {
                     entry: *entry,
                     broker: *broker,
                     dispatch: time,
                     num_shards,
                     num_finished: 0,
                     num_dropped: 0,
-                });
-                self
+                })
             }
             _ => panic!("Query in invalid state"),
         }
@@ -168,7 +176,7 @@ impl QueryStatus {
 
     /// Records the fact that a shard have finished processing and sent results back to the
     /// broker by the time `time`.
-    pub fn finish_shard(&mut self, time: Duration) -> &mut Self {
+    pub fn finish_shard(&self, time: Duration) -> Self {
         match self {
             Self::Dispatched(DispatchedQueryStatus {
                 entry,
@@ -185,32 +193,31 @@ impl QueryStatus {
                     time
                 );
                 if *num_finished + *num_dropped + 1 == *num_shards {
-                    *self = Self::Finished(FinishedQueryStatus {
+                    Self::Finished(FinishedQueryStatus {
                         entry: *entry,
                         broker: *broker,
                         dispatch: *dispatch,
                         finished: time,
                         num_shards: *num_shards,
                         num_dropped: *num_dropped,
-                    });
+                    })
                 } else {
-                    *self = Self::Dispatched(DispatchedQueryStatus {
+                    Self::Dispatched(DispatchedQueryStatus {
                         entry: *entry,
                         broker: *broker,
                         dispatch: *dispatch,
                         num_shards: *num_shards,
                         num_dropped: *num_dropped,
                         num_finished: *num_finished + 1,
-                    });
-                };
-                self
+                    })
+                }
             }
             _ => panic!("Query in invalid state"),
         }
     }
 
     /// Records the fact that a shard request had to be dropped.
-    pub fn drop_shard(&mut self, time: Duration) -> &mut Self {
+    pub fn drop_shard(&self, time: Duration) -> Self {
         match self {
             Self::Dispatched(DispatchedQueryStatus {
                 entry,
@@ -227,25 +234,24 @@ impl QueryStatus {
                     time
                 );
                 if *num_finished + *num_dropped + 1 == *num_shards {
-                    *self = Self::Finished(FinishedQueryStatus {
+                    Self::Finished(FinishedQueryStatus {
                         entry: *entry,
                         broker: *broker,
                         dispatch: *dispatch,
                         finished: time,
                         num_shards: *num_shards,
                         num_dropped: *num_dropped + 1,
-                    });
+                    })
                 } else {
-                    *self = Self::Dispatched(DispatchedQueryStatus {
+                    Self::Dispatched(DispatchedQueryStatus {
                         entry: *entry,
                         broker: *broker,
                         dispatch: *dispatch,
                         num_shards: *num_shards,
                         num_dropped: *num_dropped + 1,
                         num_finished: *num_finished,
-                    });
-                };
-                self
+                    })
+                }
             }
             _ => panic!("Query in invalid state"),
         }
@@ -268,6 +274,34 @@ mod test {
     }
 
     #[test]
+    fn test_ordering() {
+        assert_eq!(
+            Query::new(QueryId(1), RequestId(1)).partial_cmp(&Query::new(QueryId(1), RequestId(1))),
+            Some(Ordering::Equal)
+        );
+        assert_eq!(
+            Query::new(QueryId(1), RequestId(1)).partial_cmp(&Query::new(QueryId(1), RequestId(2))),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            Query::new(QueryId(1), RequestId(1)).partial_cmp(&Query::new(QueryId(1), RequestId(0))),
+            Some(Ordering::Greater)
+        );
+        assert_eq!(
+            Query::new(QueryId(1), RequestId(1)).cmp(&Query::new(QueryId(1), RequestId(1))),
+            Ordering::Equal
+        );
+        assert_eq!(
+            Query::new(QueryId(1), RequestId(1)).cmp(&Query::new(QueryId(1), RequestId(2))),
+            Ordering::Less
+        );
+        assert_eq!(
+            Query::new(QueryId(1), RequestId(1)).cmp(&Query::new(QueryId(1), RequestId(0))),
+            Ordering::Greater
+        );
+    }
+
+    #[test]
     fn test_query_status_correct_pipeline() {
         let mut query = QueryStatus::new(Duration::new(0, 1));
         assert_eq!(query, QueryStatus::New(Duration::new(0, 1)));
@@ -275,7 +309,7 @@ mod test {
         assert_eq!(query.pick_up_time(), None);
         assert_eq!(query.dispatch_time(), None);
         assert_eq!(query.finish_time(), None);
-        query.pick_up(Duration::new(0, 2));
+        query = query.pick_up(Duration::new(0, 2));
         assert_eq!(
             query,
             QueryStatus::PickedUp(PickedUpQueryStatus {
@@ -287,7 +321,8 @@ mod test {
         assert_eq!(query.pick_up_time(), Some(Duration::new(0, 2)));
         assert_eq!(query.dispatch_time(), None);
         assert_eq!(query.finish_time(), None);
-        query.dispatch(Duration::new(0, 3), 2);
+        assert_eq!(query.num_dropped(), 0);
+        query = query.dispatch(Duration::new(0, 3), 2);
         assert_eq!(
             query,
             QueryStatus::Dispatched(DispatchedQueryStatus {
@@ -303,7 +338,8 @@ mod test {
         assert_eq!(query.pick_up_time(), Some(Duration::new(0, 2)));
         assert_eq!(query.dispatch_time(), Some(Duration::new(0, 3)));
         assert_eq!(query.finish_time(), None);
-        query.finish_shard(Duration::new(0, 4));
+        assert_eq!(query.num_dropped(), 0);
+        query = query.drop_shard(Duration::new(0, 4));
         assert_eq!(
             query,
             QueryStatus::Dispatched(DispatchedQueryStatus {
@@ -311,15 +347,16 @@ mod test {
                 broker: Duration::new(0, 2),
                 dispatch: Duration::new(0, 3),
                 num_shards: 2,
-                num_finished: 1,
-                num_dropped: 0,
+                num_finished: 0,
+                num_dropped: 1,
             })
         );
         assert_eq!(query.entry_time(), Duration::new(0, 1));
         assert_eq!(query.pick_up_time(), Some(Duration::new(0, 2)));
         assert_eq!(query.dispatch_time(), Some(Duration::new(0, 3)));
         assert_eq!(query.finish_time(), None);
-        query.finish_shard(Duration::new(0, 5));
+        assert_eq!(query.num_dropped(), 1);
+        query = query.finish_shard(Duration::new(0, 5));
         assert_eq!(
             query,
             QueryStatus::Finished(FinishedQueryStatus {
@@ -328,13 +365,14 @@ mod test {
                 dispatch: Duration::new(0, 3),
                 finished: Duration::new(0, 5),
                 num_shards: 2,
-                num_dropped: 0,
+                num_dropped: 1,
             })
         );
         assert_eq!(query.entry_time(), Duration::new(0, 1));
         assert_eq!(query.pick_up_time(), Some(Duration::new(0, 2)));
         assert_eq!(query.dispatch_time(), Some(Duration::new(0, 3)));
         assert_eq!(query.finish_time(), Some(Duration::new(0, 5)));
+        assert_eq!(query.num_dropped(), 1);
     }
 
     #[test]
@@ -437,6 +475,36 @@ mod test {
             num_dropped: 0,
         })
         .finish_shard(Duration::new(0, 6));
+    }
+
+    #[test]
+    #[should_panic(expected = "Query in invalid state")]
+    fn test_query_status_drop_new() {
+        QueryStatus::New(Duration::new(0, 1)).drop_shard(Duration::new(0, 2));
+    }
+
+    #[test]
+    #[should_panic(expected = "Query in invalid state")]
+    fn test_query_status_drop_picked_up() {
+        QueryStatus::PickedUp(PickedUpQueryStatus {
+            entry: Duration::new(0, 1),
+            broker: Duration::new(0, 2),
+        })
+        .drop_shard(Duration::new(0, 2));
+    }
+
+    #[test]
+    #[should_panic(expected = "Query in invalid state")]
+    fn test_query_status_drop_one_too_many_times() {
+        QueryStatus::Finished(FinishedQueryStatus {
+            entry: Duration::new(0, 1),
+            broker: Duration::new(0, 2),
+            dispatch: Duration::new(0, 3),
+            finished: Duration::new(0, 5),
+            num_shards: 3,
+            num_dropped: 0,
+        })
+        .drop_shard(Duration::new(0, 6));
     }
 
     #[test]
