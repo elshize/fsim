@@ -49,22 +49,24 @@ pub use config::Config;
 use config::TimeUnit;
 
 mod status;
-pub use status::Status;
+
+mod im_status;
+pub use im_status::Status;
 
 /// Shard ID.
-#[derive(Id, Debug, PartialEq, PartialOrd, Eq, Ord, Serialize, Deserialize, Copy, Clone)]
+#[derive(Id, Debug, PartialEq, PartialOrd, Eq, Ord, Serialize, Deserialize, Copy, Clone, Hash)]
 pub struct ShardId(usize);
 
 /// Node ID.
-#[derive(Id, Debug, PartialEq, PartialOrd, Eq, Ord, Serialize, Deserialize, Copy, Clone)]
+#[derive(Id, Debug, PartialEq, PartialOrd, Eq, Ord, Serialize, Deserialize, Copy, Clone, Hash)]
 pub struct NodeId(usize);
 
 /// Query ID.
-#[derive(Id, Debug, PartialEq, PartialOrd, Eq, Ord, Serialize, Deserialize, Copy, Clone)]
+#[derive(Id, Debug, PartialEq, PartialOrd, Eq, Ord, Serialize, Deserialize, Copy, Clone, Hash)]
 pub struct QueryId(usize);
 
 /// Query request ID.
-#[derive(Id, Debug, PartialEq, PartialOrd, Eq, Ord, Serialize, Deserialize, Copy, Clone)]
+#[derive(Id, Debug, PartialEq, PartialOrd, Eq, Ord, Serialize, Deserialize, Copy, Clone, Hash)]
 pub struct RequestId(usize);
 
 #[derive(Debug, PartialEq, PartialOrd, Eq, Ord, Serialize, Deserialize, Copy, Clone)]
@@ -231,8 +233,8 @@ pub struct QueryRoutingSimulation<'a> {
     broker: Broker<'a>,
     query_data: Rc<Vec<config::Query>>,
     time_unit: TimeUnit,
-    //query_log: Vec<QueryStatus>,
-    status: Status,
+    history: Vec<Status>,
+    next_steps: Vec<Status>,
 }
 
 fn duration_constructor(unit: TimeUnit) -> Box<dyn Fn(u64) -> Duration> {
@@ -272,8 +274,8 @@ impl<'a> QueryRoutingSimulation<'a> {
             ),
             query_data: Rc::from(queries),
             time_unit: config.time_unit,
-            //query_log: Vec::new(),
-            status: Status::default(),
+            history: vec![Status::default()],
+            next_steps: Vec::new(),
         };
         let nodes = sim.set_up_nodes(&config);
         for NodeEntry {
@@ -317,9 +319,28 @@ impl<'a> QueryRoutingSimulation<'a> {
         self.schedule(Duration::from_secs(0), process)
     }
 
+    fn status(&self) -> &Status {
+        self.history.iter().last().unwrap()
+    }
+
+    /// Goes back in history. If no past steps exist, it returns an error.
+    pub fn step_back(&mut self) -> Result<(), ()> {
+        match self.history.pop() {
+            Some(status) => {
+                self.next_steps.push(status);
+                Ok(())
+            }
+            None => Err(()),
+        }
+    }
+
     /// Advance the simulation
     pub fn advance(&mut self) {
         use Effect::*;
+        if let Some(next) = self.next_steps.pop() {
+            self.history.push(next);
+            return;
+        }
         if let Some(Reverse(Event { time, process })) = self.scheduled_events.pop() {
             if self.time < time {
                 log::info!("Elapsed {:?}", time);
@@ -329,7 +350,7 @@ impl<'a> QueryRoutingSimulation<'a> {
                 Process::QueryGenerator(stage) => self.query_generator.run(stage),
                 Process::Broker(stage) => {
                     if let &BrokerStage::Route(query) = &stage {
-                        self.status.pick_up_query(query, time);
+                        self.history.push(self.status().pick_up_query(query, time));
                     }
                     self.broker.run(stage)
                 }
@@ -350,7 +371,7 @@ impl<'a> QueryRoutingSimulation<'a> {
                     }
                 }
                 QueryQueuePut(query, process) => {
-                    self.status.enter_query(query, time);
+                    self.history.push(self.status().enter_query(query, time));
                     push_query!(self, self.incoming_queries, query, process);
                 }
                 QueryQueueGet(callback) => {
@@ -362,7 +383,8 @@ impl<'a> QueryRoutingSimulation<'a> {
                     nodes,
                 } => {
                     self.schedule(timeout, Process::Broker(BrokerStage::GetQuery));
-                    self.status.dispatch_query(query, time, nodes.len());
+                    self.history
+                        .push(self.status().dispatch_query(query, time, nodes.len()));
                     for NodeRequest { id, shard } in nodes {
                         let queue = &mut self
                             .nodes
@@ -389,7 +411,7 @@ impl<'a> QueryRoutingSimulation<'a> {
                     query,
                     node,
                 } => {
-                    self.status.finish_shard(query, time);
+                    self.history.push(self.status().finish_shard(query, time));
                     self.schedule(
                         timeout,
                         Process::Node {

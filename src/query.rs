@@ -1,5 +1,6 @@
 use crate::{QueryId, RequestId};
 use std::cmp::Ordering;
+use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
 /// Identifies a query passed along within a simulation.
@@ -30,6 +31,12 @@ impl PartialOrd for Query {
 impl Ord for Query {
     fn cmp(&self, other: &Self) -> Ordering {
         self.request.cmp(&other.request)
+    }
+}
+
+impl Hash for Query {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.request.hash(state);
     }
 }
 
