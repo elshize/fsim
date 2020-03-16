@@ -60,13 +60,22 @@ impl Assignment {
     }
 }
 
+/// Describes normal distribution of time intervals between queries.
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub struct QueryDistribution {
+    /// Mean time interval.
+    pub mean: f32,
+    /// Standard deviation.
+    pub std: f32,
+}
+
 /// Simulation configuration typically loaded from a file.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
     /// Number of brokers.
     pub brokers: usize,
     /// Average interval between arriving queries.
-    pub query_interval: u16,
+    pub query_distribution: QueryDistribution,
     /// Shard to node assignment.
     pub assignment: Assignment,
     /// Random seed.
@@ -93,7 +102,9 @@ impl Config {
     /// time_unit: micro
     /// brokers: 2
     /// cpus_per_node: 2
-    /// query_interval: 10
+    /// query_distribution:
+    ///     mean: 10
+    ///     std: 1
     /// assignment:
     ///     - [0, 1, 0]
     ///     - [1, 1, 0]
@@ -102,7 +113,8 @@ impl Config {
     /// assert_eq!(config.time_unit, TimeUnit::Micro);
     /// assert_eq!(config.brokers, 2);
     /// assert_eq!(config.cpus_per_node, 2);
-    /// assert_eq!(config.query_interval, 10);
+    /// assert_eq!(config.query_distribution.mean, 10.0);
+    /// assert_eq!(config.query_distribution.std, 1.0);
     /// # Ok(())
     /// # }
     /// ```
@@ -183,8 +195,11 @@ mod test {
     fn test_config() -> anyhow::Result<()> {
         let input = r#"
 brokers: 2
-query_interval: 10
+query_distribution:
+    mean: 10
+    std: 1
 seed: 17
+time_unit: milli
 cpus_per_node: 2
 assignment:
     - [0, 1, 0]
@@ -192,7 +207,9 @@ assignment:
     - [0, 1, 1]"#;
         let config = Config::from_yaml(Cursor::new(input))?;
         assert_eq!(config.brokers, 2);
-        assert_eq!(config.query_interval, 10);
+        assert_eq!(config.query_distribution.mean, 10.0);
+        assert_eq!(config.query_distribution.std, 1.0);
+        assert_eq!(config.time_unit, TimeUnit::Milli);
         assert_eq!(config.cpus_per_node, 2);
         assert_eq!(config.seed, Some(17));
         assert_eq!(config.routing, RoutingPolicy::Static);
@@ -211,7 +228,9 @@ assignment:
     fn test_verify_fails_empty_assignment() {
         let input = r#"
 brokers: 1
-query_interval: 10
+query_distribution:
+    mean: 10
+    std: 1
 cpus_per_node: 1
 assignment: []"#;
         assert_eq!(
@@ -225,7 +244,9 @@ assignment: []"#;
         let input = r#"
 brokers: 1
 cpus_per_node: 1
-query_interval: 10
+query_distribution:
+    mean: 10
+    std: 1
 assignment:
     - []
     - [1, 2]"#;
@@ -240,7 +261,9 @@ assignment:
         let input = r#"
 brokers: 1
 cpus_per_node: 1
-query_interval: 10
+query_distribution:
+    mean: 10
+    std: 1
 assignment:
     - [1]
     - [1, 0]"#;
@@ -255,7 +278,9 @@ assignment:
         let input = r#"
 brokers: 1
 cpus_per_node: 1
-query_interval: 10
+query_distribution:
+    mean: 10
+    std: 1
 assignment:
     - [1, 0]
     - [1, -2]"#;

@@ -52,7 +52,7 @@ impl Status {
         self.queries_incomplete
     }
 
-    fn active_query(&mut self, query: &Query) -> &mut QueryStatus {
+    pub fn active_query(&mut self, query: &Query) -> &mut QueryStatus {
         self.active_queries
             .get_mut(&query)
             .expect("Request ID out of bounds")

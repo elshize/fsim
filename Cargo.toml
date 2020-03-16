@@ -25,6 +25,9 @@ serde_yaml = "0.8"
 structopt = "0.3"
 id-derive = { path = "../id-derive" }
 im-rc = "14.3.0"
+tui = "0.8"
+termion = "1.5"
+lazy_static = "1.4"
 
 [dev-dependencies]
 proptest = "0.9"

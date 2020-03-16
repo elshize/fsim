@@ -35,7 +35,6 @@ impl<'a> Runnable for Node<'a> {
         match entry {
             GetQuery => {
                 let id = self.id;
-                log::trace!("Node {} requesting an incoming query", &id);
                 Effect::NodeQueryGet {
                     node: id,
                     callback: ProcessCallback::new(move |(query, shard)| Process::Node {

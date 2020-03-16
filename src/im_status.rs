@@ -1,13 +1,15 @@
 use crate::{Query, QueryStatus};
-use im_rc::HashMap;
+use im_rc::{HashMap, Vector};
 use std::time::Duration;
 
+#[derive(Clone)]
 /// Immutable version of `Status`.
 pub struct Status {
     time: Duration,
     queries_incomplete: usize,
     active_queries: HashMap<Query, QueryStatus>,
     past_queries: HashMap<Query, QueryStatus>,
+    logs: Vector<String>,
 }
 
 impl Default for Status {
@@ -17,6 +19,7 @@ impl Default for Status {
             queries_incomplete: 0,
             active_queries: HashMap::new(),
             past_queries: HashMap::new(),
+            logs: Vector::new(),
         }
     }
 }
@@ -48,7 +51,13 @@ impl Status {
         self.queries_incomplete
     }
 
-    fn active_query(&self, query: &Query) -> &QueryStatus {
+    /// Iterates over active queries.
+    pub fn active(&self) -> impl Iterator<Item = &(Query, QueryStatus)> {
+        self.active_queries.iter()
+    }
+
+    /// Get active query identified by `query`.
+    pub fn active_query(&self, query: &Query) -> &QueryStatus {
         self.active_queries
             .get(&query)
             .expect("Request ID out of bounds")
@@ -63,21 +72,25 @@ impl Status {
 
     /// Logs a new query that entered into the system at `time`.
     pub fn enter_query(&self, query: Query, time: Duration) -> Self {
+        log::debug!("[{:?}] [{}] Enters incoming queue", time, query);
         Self {
             time,
             active_queries: self.active_queries.clone()
                 + HashMap::unit(query, QueryStatus::new(time)),
             past_queries: self.past_queries.clone(),
+            logs: self.logs.clone(),
             ..*self
         }
     }
 
     /// Changes the status of `query` to picked up at `time`.
     pub fn pick_up_query(&self, query: Query, time: Duration) -> Self {
+        log::debug!("[{:?}] [{}] Picked up by broker", time, query);
         Self {
             time,
             active_queries: self.alter(query, |s| s.pick_up(time)),
             past_queries: self.past_queries.clone(),
+            logs: self.logs.clone(),
             ..*self
         }
     }
@@ -88,6 +101,7 @@ impl Status {
             time,
             active_queries: self.alter(query, |s| s.dispatch(time, num_shards)),
             past_queries: self.past_queries.clone(),
+            logs: self.logs.clone(),
             ..*self
         }
     }
@@ -102,6 +116,8 @@ impl Status {
                     time,
                     active_queries: self.active_queries.without(&query),
                     past_queries: self.past_queries.clone() + HashMap::unit(query, s),
+                    queries_incomplete,
+                    logs: self.logs.clone(),
                     ..*self
                 }
             }
@@ -109,6 +125,7 @@ impl Status {
                 time,
                 active_queries: self.alter(query, |_| s),
                 past_queries: self.past_queries.clone(),
+                logs: self.logs.clone(),
                 ..*self
             },
         }
@@ -125,6 +142,7 @@ impl Status {
                     active_queries: self.active_queries.without(&query),
                     past_queries: self.past_queries.clone() + HashMap::unit(query, s),
                     queries_incomplete,
+                    logs: self.logs.clone(),
                     ..*self
                 }
             }
@@ -132,8 +150,29 @@ impl Status {
                 time,
                 active_queries: self.alter(query, |_| s),
                 past_queries: self.past_queries.clone(),
+                logs: self.logs.clone(),
                 ..*self
             },
+        }
+    }
+
+    /// Iterates over log events.
+    pub fn logs(&self) -> impl Iterator<Item = &String> {
+        self.logs.iter()
+    }
+
+    /// Add logged events.
+    pub fn log_events<E>(&self, events: E) -> Self
+    where
+        E: Iterator<Item = String>,
+    {
+        let mut logs = self.logs.clone();
+        logs.extend(events);
+        Self {
+            active_queries: self.active_queries.clone(),
+            past_queries: self.past_queries.clone(),
+            logs,
+            ..*self
         }
     }
 }
@@ -153,6 +192,7 @@ mod test {
         assert_eq!(status.queries_active(), 0);
         assert_eq!(status.queries_incomplete(), 0);
         assert_eq!(status.queries_incomplete(), 0);
+        assert!(status.logs().collect::<Vec<_>>().is_empty());
     }
 
     fn secs(secs: u64) -> Duration {
@@ -238,6 +278,23 @@ mod test {
                     .finish_shard(secs(7))
                     .finish_shard(secs(8))
             }
+        );
+        let status =
+            status.log_events(vec![String::from("Log1"), String::from("Log2")].into_iter());
+        assert_eq!(
+            status.logs().cloned().collect::<Vec<_>>(),
+            vec![String::from("Log1"), String::from("Log2")]
+        );
+        let status =
+            status.log_events(vec![String::from("Log3"), String::from("Log4")].into_iter());
+        assert_eq!(
+            status.logs().cloned().collect::<Vec<_>>(),
+            vec![
+                String::from("Log1"),
+                String::from("Log2"),
+                String::from("Log3"),
+                String::from("Log4"),
+            ]
         );
     }
 }

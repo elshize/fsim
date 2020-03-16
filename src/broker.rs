@@ -6,13 +6,12 @@ use crate::{
     process::Runnable, query::Query, queue::ProcessCallback, Effect, NodeRequest, Process,
     ReplicaId,
 };
-use log::trace;
 
 /// Entry points to the broker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BrokerStage {
     /// Request a query from an incoming query queue.
-    GetQuery,
+    RequestQuery,
     /// Route the query to replica nodes.
     Route(Query),
 }
@@ -45,11 +44,12 @@ impl<'a> Runnable for Broker<'a> {
     fn run(&self, entry: Self::Payload) -> Self::Effect {
         use BrokerStage::*;
         match entry {
-            GetQuery => {
-                trace!("Broker requesting a query from incoming queue");
+            RequestQuery => {
+                //log::info!("[Broker] requesting a query from incoming queue");
                 Effect::QueryQueueGet(ProcessCallback::new(|q| Process::Broker(Route(q))))
             }
             Route(query) => {
+                //trace!("[Broker] picked up a query");
                 let ShardSelection {
                     time: shard_selection_time,
                     shards,
@@ -59,7 +59,7 @@ impl<'a> Runnable for Broker<'a> {
                     replicas,
                 } = self.replica_selector.select(query, shards);
                 let timeout = shard_selection_time + replica_selection_time;
-                trace!("Broker selected shards in {:?}", &timeout);
+                //trace!("[Broker] selected shards in {:?}", &timeout);
                 Effect::Route {
                     timeout,
                     query,
@@ -95,7 +95,7 @@ mod test {
             ExhaustiveSelector::new(3),
             RandomReplicaSelector::<Uniform<usize>>::new(&[3, 3, 3]),
         );
-        if let Effect::QueryQueueGet(callback) = broker.run(BrokerStage::GetQuery) {
+        if let Effect::QueryQueueGet(callback) = broker.run(BrokerStage::RequestQuery) {
             assert_eq!(
                 callback.process(test_query()),
                 Process::Broker(BrokerStage::Route(test_query()))

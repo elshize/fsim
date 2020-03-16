@@ -48,10 +48,10 @@ pub mod config;
 pub use config::Config;
 use config::TimeUnit;
 
-mod status;
-
 mod im_status;
 pub use im_status::Status;
+
+pub mod logger;
 
 /// Shard ID.
 #[derive(Id, Debug, PartialEq, PartialOrd, Eq, Ord, Serialize, Deserialize, Copy, Clone, Hash)]
@@ -182,18 +182,18 @@ pub enum Effect<'a> {
 }
 
 macro_rules! push_query {
-    ($s:expr, $queue:expr, $query:expr, $process:expr) => {
+    ($s:expr, $time:expr, $queue:expr, $query:expr, $process:expr) => {
         if let PushResult::Pushed { resumed } = $queue.push($query, $process) {
-            $s.schedule_now($process);
+            $s.schedule($time, $process);
             if let Some(resumed) = resumed {
-                $s.schedule_now(resumed);
+                $s.schedule($time, resumed);
             }
         }
     };
-    ($s:expr, $queue:expr, $query:expr) => {
+    ($s:expr, $time:expr, $queue:expr, $query:expr) => {
         if let PushResult::Pushed { resumed } = $queue.push_or_drop($query) {
             if let Some(resumed) = resumed {
-                $s.schedule_now(resumed);
+                $s.schedule($time, resumed);
             }
             true
         } else {
@@ -203,11 +203,11 @@ macro_rules! push_query {
 }
 
 macro_rules! pop_query {
-    ($s:expr, $queue:expr, $callback:expr) => {
+    ($s:expr, $time:expr, $queue:expr, $callback:expr) => {
         if let PopResult::Popped { process, resumed } = $queue.pop($callback) {
-            $s.schedule_now(process);
+            $s.schedule($time, process);
             if let Some(resumed) = resumed {
-                $s.schedule_now(resumed);
+                $s.schedule($time, resumed);
             }
         }
     };
@@ -225,9 +225,6 @@ pub struct QueryRoutingSimulation<'a> {
 
     /// Nodes. Each contains a number of shard replicas.
     nodes: Vec<NodeEntry<'a>>,
-
-    /// Current simulation time.
-    time: Duration,
 
     query_generator: QueryGenerator<'a, Normal<f32>, Uniform<usize>, Box<dyn Fn(u64) -> Duration>>,
     broker: Broker<'a>,
@@ -258,11 +255,14 @@ impl<'a> QueryRoutingSimulation<'a> {
             incoming_queries: Default::default(),
             scheduled_events: BinaryHeap::new(),
             nodes: vec![],
-            time: Duration::from_secs(0),
             query_generator: QueryGenerator::new(
                 (0..queries.len()).map(QueryId::from).collect(),
                 ChaChaRng::seed_from_u64(seeder.next_u64()),
-                Normal::new(f32::from(config.query_interval), 1.0).unwrap(),
+                Normal::new(
+                    config.query_distribution.mean,
+                    config.query_distribution.std,
+                )
+                .unwrap(),
                 query_selection_dist,
                 duration_constructor(config.time_unit),
             ),
@@ -278,20 +278,24 @@ impl<'a> QueryRoutingSimulation<'a> {
             next_steps: Vec::new(),
         };
         let nodes = sim.set_up_nodes(&config);
+        let time = Duration::from_nanos(0);
         for NodeEntry {
             node,
             entry_queue: _,
         } in &nodes
         {
             for _ in 0..config.cpus_per_node {
-                sim.schedule_now(Process::Node {
-                    id: node.id,
-                    stage: NodeStage::GetQuery,
-                });
+                sim.schedule(
+                    time,
+                    Process::Node {
+                        id: node.id,
+                        stage: NodeStage::GetQuery,
+                    },
+                );
             }
         }
-        sim.schedule_now(Process::QueryGenerator(QueryGeneratorStage::Generate));
-        sim.schedule_now(Process::Broker(BrokerStage::GetQuery));
+        sim.schedule(time, Process::QueryGenerator(QueryGeneratorStage::Generate));
+        sim.schedule(time, Process::Broker(BrokerStage::RequestQuery));
         sim.nodes = nodes;
         sim
     }
@@ -309,28 +313,37 @@ impl<'a> QueryRoutingSimulation<'a> {
             .collect()
     }
 
-    /// Schedule a process to run after `time` counting from the current simulation time.
+    /// Schedule a process to run at `time`.
     pub fn schedule(&mut self, time: Duration, process: Process) {
         self.scheduled_events
-            .push(Reverse(Event::new(self.time + time, process)));
+            .push(Reverse(Event::new(time, process)));
     }
 
-    fn schedule_now(&mut self, process: Process) {
-        self.schedule(Duration::from_secs(0), process)
+    /// Returns the current simulation step.
+    pub fn step(&self) -> usize {
+        self.history.len() - 1
     }
 
-    fn status(&self) -> &Status {
+    /// Returns the current simulation status.
+    pub fn status(&self) -> &Status {
         self.history.iter().last().unwrap()
     }
 
     /// Goes back in history. If no past steps exist, it returns an error.
     pub fn step_back(&mut self) -> Result<(), ()> {
-        match self.history.pop() {
-            Some(status) => {
-                self.next_steps.push(status);
-                Ok(())
-            }
-            None => Err(()),
+        if self.history.len() > 1 {
+            self.next_steps.push(self.history.pop().unwrap());
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    /// Goes one step forward in history. Calls `advance` until history is modified.
+    pub fn step_forward(&mut self) {
+        let history_size = self.history.len();
+        while history_size == self.history.len() {
+            self.advance();
         }
     }
 
@@ -342,63 +355,89 @@ impl<'a> QueryRoutingSimulation<'a> {
             return;
         }
         if let Some(Reverse(Event { time, process })) = self.scheduled_events.pop() {
-            if self.time < time {
-                log::info!("Elapsed {:?}", time);
-            }
-            self.time = time;
+            assert!(
+                self.status().time() <= time,
+                "Current event scheduled at time {:?}, which is earlier than current time {:?}",
+                time,
+                self.status().time()
+            );
+
+            let mut status: Option<Status> = None;
+            let current_status = self.status().clone();
+            let current_status = move || Some(current_status.clone());
+
             let effect = match process {
                 Process::QueryGenerator(stage) => self.query_generator.run(stage),
                 Process::Broker(stage) => {
                     if let &BrokerStage::Route(query) = &stage {
-                        self.history.push(self.status().pick_up_query(query, time));
+                        status = status
+                            .or_else(&current_status)
+                            .map(|s| s.pick_up_query(query, time));
+                    } else {
+                        log::debug!("[{:?}] Broker waiting for incoming query", time);
                     }
                     self.broker.run(stage)
                 }
-                Process::Node { id, stage } => self
-                    .nodes
-                    .get(usize::from(id))
-                    .expect("Node ID out of bounds")
-                    .node
-                    .run(stage),
+                Process::Node { id, stage } => {
+                    log::debug!("[{:?}] Node {} waiting for incoming query", time, id);
+                    self.nodes
+                        .get(usize::from(id))
+                        .expect("Node ID out of bounds")
+                        .node
+                        .run(stage)
+                }
             };
             match effect {
                 Schedule(event) => {
-                    self.schedule(event.time, event.process);
+                    self.schedule(time + event.time, event.process);
                 }
                 ScheduleMany(events) => {
                     for event in events {
-                        self.schedule(event.time, event.process);
+                        self.schedule(time + event.time, event.process);
                     }
                 }
                 QueryQueuePut(query, process) => {
-                    self.history.push(self.status().enter_query(query, time));
-                    push_query!(self, self.incoming_queries, query, process);
+                    status = status
+                        .or_else(&current_status)
+                        .map(|s| s.enter_query(query, time));
+                    push_query!(self, time, self.incoming_queries, query, process);
                 }
                 QueryQueueGet(callback) => {
-                    pop_query!(self, self.incoming_queries, callback);
+                    pop_query!(self, time, self.incoming_queries, callback);
                 }
                 Route {
                     timeout,
                     query,
                     nodes,
                 } => {
-                    self.schedule(timeout, Process::Broker(BrokerStage::GetQuery));
-                    self.history
-                        .push(self.status().dispatch_query(query, time, nodes.len()));
+                    self.schedule(time + timeout, Process::Broker(BrokerStage::RequestQuery));
+                    status = status
+                        .or_else(&current_status)
+                        .map(|s| s.dispatch_query(query, time + timeout, nodes.len()));
                     for NodeRequest { id, shard } in nodes {
+                        log::debug!(
+                            "[{:?}] [{}] Dispatched to ({:?}, {:?})",
+                            time,
+                            query,
+                            id,
+                            shard
+                        );
                         let queue = &mut self
                             .nodes
                             .get_mut(usize::from(id))
                             .expect("Node ID out of bounds")
                             .entry_queue;
-                        if !push_query!(self, queue, (query, shard)) {
-                            //
+                        if !push_query!(self, time, queue, (query, shard)) {
+                            status = status
+                                .or_else(&current_status)
+                                .map(|s| s.drop_shard(query, time + timeout));
                         }
                     }
                 }
                 NodeQueryGet { node, callback } => {
                     pop_query!(
                         self,
+                        time,
                         self.nodes
                             .get_mut(usize::from(node))
                             .expect("Node ID out of bounds")
@@ -411,9 +450,11 @@ impl<'a> QueryRoutingSimulation<'a> {
                     query,
                     node,
                 } => {
-                    self.history.push(self.status().finish_shard(query, time));
+                    status = status
+                        .or_else(current_status)
+                        .map(|s| s.finish_shard(query, time + timeout));
                     self.schedule(
-                        timeout,
+                        time + timeout,
                         Process::Node {
                             id: node,
                             stage: NodeStage::GetQuery,
@@ -421,20 +462,29 @@ impl<'a> QueryRoutingSimulation<'a> {
                     );
                 }
             }
+            if let Some(status) = status {
+                let status = status.log_events(
+                    logger::clear()
+                        .expect("Unable to retrieve logs")
+                        .into_iter(),
+                );
+                log::info!("----- {:?} -----", status.time());
+                self.history.push(status);
+            }
         }
     }
 
     /// Run until no events are found.
     pub fn run(&mut self) {
         while !self.scheduled_events.is_empty() {
-            self.advance();
+            self.step_forward();
         }
     }
 
     /// Run until certain time.
     pub fn run_until(&mut self, time: Duration) {
-        while !self.scheduled_events.is_empty() && self.time < time {
-            self.advance();
+        while !self.scheduled_events.is_empty() && self.status().time() < time {
+            self.step_forward();
         }
     }
 
@@ -444,7 +494,7 @@ impl<'a> QueryRoutingSimulation<'a> {
             if self.scheduled_events.is_empty() {
                 break;
             }
-            self.advance();
+            self.step_forward();
         }
     }
 }
@@ -488,15 +538,15 @@ mod test {
 
     #[test]
     fn test_event_order() {
-        let proc = Process::Broker(BrokerStage::GetQuery);
+        let proc = Process::Broker(BrokerStage::RequestQuery);
         assert_eq!(
             Event::new(
                 Duration::from_secs(1),
-                Process::Broker(BrokerStage::GetQuery),
+                Process::Broker(BrokerStage::RequestQuery),
             ),
             Event::new(
                 Duration::from_secs(1),
-                Process::Broker(BrokerStage::GetQuery),
+                Process::Broker(BrokerStage::RequestQuery),
             )
         );
         assert!(
@@ -533,7 +583,9 @@ mod test {
         let config = r#"
 brokers: 2
 cpus_per_node: 2
-query_interval: 10
+query_distribution:
+    mean: 10
+    std: 1
 seed: 17
 routing: static
 time_unit: micro
@@ -551,6 +603,5 @@ assignment:
         );
         assert_eq!(sim.scheduled_events.len(), 8);
         assert!(sim.incoming_queries.is_empty());
-        // TODO
     }
 }

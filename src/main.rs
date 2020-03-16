@@ -11,35 +11,23 @@
 #![allow(clippy::module_name_repetitions, clippy::default_trait_access)]
 
 use anyhow::{Context, Result};
-use fern::colors::{Color, ColoredLevelConfig};
+use event::{Event, Events};
 use fsim::{config::Config, QueryRoutingSimulation};
 use std::fs::File;
+use std::io;
 use std::io::{stdin, BufRead, BufReader};
 use std::path::PathBuf;
+use std::time::Duration;
 use structopt::StructOpt;
+use termion::event::Key;
+use termion::raw::IntoRawMode;
+use tui::backend::TermionBackend;
+use tui::Terminal;
 
-fn setup_logger(opt: &Opt) -> Result<(), fern::InitError> {
-    let colors = ColoredLevelConfig::new()
-        .error(Color::Red)
-        .warn(Color::Yellow)
-        .info(Color::White)
-        .debug(Color::White)
-        .trace(Color::BrightBlack);
-    let mut dispatch = fern::Dispatch::new().format(move |out, message, record| {
-        out.finish(format_args!(
-            "[{}] {}",
-            colors.color(record.level()),
-            message
-        ))
-    });
-    dispatch = if opt.trace {
-        dispatch.level(log::LevelFilter::Trace)
-    } else {
-        dispatch.level(log::LevelFilter::Debug)
-    };
-    dispatch.chain(std::io::stdout()).apply()?;
-    Ok(())
-}
+mod app;
+use app::{App, Component};
+mod event;
+mod ui;
 
 #[derive(Debug, StructOpt)]
 struct Opt {
@@ -51,6 +39,9 @@ struct Opt {
     #[structopt(short, long)]
     /// Print trace messages.
     trace: bool,
+    #[structopt(long)]
+    /// Print logs to a file.
+    log_file: Option<PathBuf>,
 }
 
 struct Input<'a>(Box<dyn BufRead + 'a>);
@@ -68,16 +59,113 @@ impl<'a> Input<'a> {
 }
 
 fn run(opt: Opt) -> Result<()> {
-    setup_logger(&opt).context("Could not set up logger")?;
+    fsim::logger::LoggerBuilder::default()
+        .level(if opt.trace {
+            log::LevelFilter::Trace
+        } else {
+            log::LevelFilter::Debug
+        })
+        .target("fsim")
+        .init()?;
     let config = Config::from_yaml(File::open(opt.config)?)?;
-    println!("{:?}", config);
     let queries: Result<Vec<fsim::config::Query>> =
         serde_json::Deserializer::from_reader(Input::new(opt.queries)?.reader())
             .into_iter()
             .map(|elem| elem.context("Failed to parse query"))
             .collect();
-    let mut sim = QueryRoutingSimulation::from_config(config, queries?);
-    sim.run_until(std::time::Duration::from_millis(10));
+    let mut app = App::new(QueryRoutingSimulation::from_config(config, queries?));
+    let events = Events::with_config(event::Config {
+        tick_rate: Duration::from_millis(200),
+        exit_key: Key::Null,
+    });
+
+    use std::io::Write;
+    write!(io::stdout().into_raw_mode()?, "{}", termion::clear::All).unwrap();
+
+    let stdout = io::stdout().into_raw_mode()?;
+    let backend = TermionBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+    terminal.hide_cursor()?;
+
+    loop {
+        terminal.draw(|mut f| ui::draw(&mut f, &app))?;
+
+        app.focus = match app.focus.take() {
+            None => match events.next()? {
+                Event::Input(key) => match key {
+                    Key::Ctrl('c') => {
+                        break;
+                    }
+                    Key::Left | Key::Char('h') | Key::Char(',') => {
+                        app.prev();
+                        None
+                    }
+                    Key::Right | Key::Char('l') | Key::Char('.') => {
+                        app.next();
+                        None
+                    }
+                    Key::Char('A') => {
+                        let mut queries: Vec<_> = app.sim.status().active().cloned().collect();
+                        queries.sort_by_key(|q| q.0.request);
+                        Some(Component::Active {
+                            queries,
+                            selected: 0,
+                        })
+                    }
+                    Key::Char('L') => Some(Component::Logs),
+                    _ => None,
+                },
+                Event::Tick => None,
+            },
+            Some(Component::Active { queries, selected }) => match events.next()? {
+                Event::Input(key) => match key {
+                    Key::Ctrl('c') => {
+                        break;
+                    }
+                    Key::Up | Key::Char('k') => Some(Component::Active {
+                        queries,
+                        selected: selected.checked_sub(1).unwrap_or(0),
+                    }),
+                    Key::Down | Key::Char('j') => Some(Component::Active {
+                        queries,
+                        selected: std::cmp::min(
+                            selected + 1,
+                            app.sim
+                                .status()
+                                .queries_active()
+                                .checked_sub(1)
+                                .unwrap_or(0),
+                        ),
+                    }),
+                    Key::Char('\n') => Some(Component::ActiveDetails { queries, selected }),
+                    Key::Esc | Key::Char('d') => None,
+                    _ => Some(Component::Active { queries, selected }),
+                },
+                Event::Tick => Some(Component::Active { queries, selected }),
+            },
+            Some(Component::ActiveDetails { queries, selected }) => match events.next()? {
+                Event::Input(key) => match key {
+                    Key::Ctrl('c') => {
+                        break;
+                    }
+                    Key::Esc | Key::Char('d') => Some(Component::Active { queries, selected }),
+                    _ => Some(Component::ActiveDetails { queries, selected }),
+                },
+                _ => Some(Component::ActiveDetails { queries, selected }),
+            },
+            Some(Component::Logs) => match events.next()? {
+                Event::Input(key) => match key {
+                    Key::Ctrl('c') => {
+                        break;
+                    }
+                    Key::Esc | Key::Char('d') => None,
+                    _ => Some(Component::Logs),
+                },
+                _ => Some(Component::Logs),
+            },
+        }
+    }
+    terminal.show_cursor()?;
     Ok(())
 }
 

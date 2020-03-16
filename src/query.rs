@@ -1,5 +1,6 @@
 use crate::{QueryId, RequestId};
 use std::cmp::Ordering;
+use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
@@ -19,6 +20,12 @@ impl Query {
     /// Constructs a new query with the given query ID and request ID.
     pub fn new(id: QueryId, request: RequestId) -> Self {
         Self { id, request }
+    }
+}
+
+impl fmt::Display for Query {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        write!(f, "{}/{}", self.request, self.id)
     }
 }
 
