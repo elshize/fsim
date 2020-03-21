@@ -1,3 +1,5 @@
+#![cfg_attr(tarpaulin, skip)]
+
 use crate::app::Component;
 use fsim::{Query, QueryStatus};
 use tui::{

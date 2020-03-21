@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![cfg_attr(tarpaulin, skip)]
 use std::io;
 use std::sync::mpsc;
 use std::sync::{

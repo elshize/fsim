@@ -214,7 +214,7 @@ assignment:
         assert_eq!(config.seed, Some(17));
         assert_eq!(config.routing, RoutingPolicy::Static);
         assert!(
-            config.assignment.weights.partial_cmp(&vec![
+            config.assignment.weights().partial_cmp(&vec![
                 vec![0.0, 1.0, 0.0],
                 vec![1.0, 1.0, 0.0],
                 vec![0.0, 1.0, 1.0]

@@ -31,3 +31,38 @@ impl<'a> App<'a> {
         if let Err(_) = self.sim.step_back() {}
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use fsim::Config;
+    use fsim::QueryRoutingSimulation;
+    use proptest::prelude::*;
+    use std::fs::File;
+
+    proptest! {
+        #[test]
+        fn test_random_selector(sequence in prop::collection::vec(prop::bool::ANY, 100)) {
+            let sim = QueryRoutingSimulation::from_config(
+                Config::from_yaml(File::open("tests/config.yml").unwrap()).unwrap(),
+                serde_json::Deserializer::from_reader(File::open("tests/queries.jl").unwrap())
+                    .into_iter()
+                    .map(|elem| elem.expect("Failed to parse query"))
+                    .collect(),
+            );
+            let mut app = App::new(sim);
+            assert_eq!(app.sim.history().collect::<Vec<_>>().len(), 1);
+            let mut history_size = 1;
+            for forward in sequence {
+                if forward {
+                    app.next();
+                    history_size += 1;
+                } else {
+                    app.prev();
+                    history_size = std::cmp::max(history_size - 1, 1);
+                }
+                assert_eq!(app.sim.history().collect::<Vec<_>>().len(), history_size);
+            }
+        }
+    }
+}

@@ -103,30 +103,6 @@ impl LoggerBuilder {
     }
 }
 
-//pub fn init(level: log::LevelFilter) -> anyhow::Result<()> {
-//    if !*BUFFER_INITIALIZED
-//        .read()
-//        .map_err(|err| anyhow!("{:?}", err))?
-//    {
-//        let buffer = Arc::clone(&LOG_BUFFER);
-//        fern::Dispatch::new()
-//            .level(level)
-//            .filter(|metadata| metadata.target().starts_with("fsim"))
-//            .chain(fern::Output::call(move |record| {
-//                buffer.write().expect("Poisoned lock").push(format!(
-//                    "{:7} {}",
-//                    format!("[{}]", record.level()),
-//                    record.args()
-//                ));
-//            }))
-//            .apply()?;
-//        *BUFFER_INITIALIZED
-//            .write()
-//            .map_err(|err| anyhow!("{:?}", err))? = true;
-//    }
-//    Ok(())
-//}
-
 /// Clears the current log buffer and returns its contents.
 pub fn clear() -> anyhow::Result<Vec<String>> {
     let mut handle = LOG_BUFFER.write().map_err(|err| anyhow!("{:?}", err))?;

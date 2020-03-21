@@ -241,7 +241,7 @@ mod test {
         assert_eq!(status.queries_finished(), 1);
         assert_eq!(status.queries_incomplete(), 1);
         assert_eq!(
-            status.active_queries,
+            status.active().copied().collect::<HashMap<_, _>>(),
             hashmap![q2 => QueryStatus::new(secs(2))]
         );
         assert_eq!(
