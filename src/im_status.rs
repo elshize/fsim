@@ -72,7 +72,6 @@ impl Status {
 
     /// Logs a new query that entered into the system at `time`.
     pub fn enter_query(&self, query: Query, time: Duration) -> Self {
-        log::debug!("[{:?}] [{}] Enters incoming queue", time, query);
         Self {
             time,
             active_queries: self.active_queries.clone()
@@ -85,7 +84,7 @@ impl Status {
 
     /// Changes the status of `query` to picked up at `time`.
     pub fn pick_up_query(&self, query: Query, time: Duration) -> Self {
-        log::debug!("[{:?}] [{}] Picked up by broker", time, query);
+        //log::debug!("[{:?}] [{}] Picked up by broker", time, query);
         Self {
             time,
             active_queries: self.alter(query, |s| s.pick_up(time)),

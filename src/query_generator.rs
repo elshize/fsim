@@ -93,6 +93,10 @@ where
             }
             Timeout => {
                 let timeout = self.time_dist.sample(self.rand.borrow_mut().deref_mut());
+                let timeout = match timeout.partial_cmp(&0_f32) {
+                    None | Some(std::cmp::Ordering::Less) => 0_f32,
+                    _ => timeout,
+                };
                 let timeout = (self.duration_from_u64)(timeout.round() as u64);
                 trace!("Scheduling new query in {:?}", timeout);
                 Effect::Schedule(Event::new(timeout, QueryGenerator(Generate)))

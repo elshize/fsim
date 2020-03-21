@@ -20,6 +20,73 @@ impl<'a, T, P> ProcessCallback<'a, T, P> {
     }
 }
 
+/// Container of 0, 1, or 2 processes to resume.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Resumed<P> {
+    None,
+    One(P),
+    Two(P, P),
+}
+
+impl<P> Resumed<P> {
+    fn new(p: P, q: Option<P>) -> Self {
+        if let Some(q) = q {
+            Resumed::Two(p, q)
+        } else {
+            Resumed::One(p)
+        }
+    }
+}
+
+impl<P> From<P> for Resumed<P> {
+    fn from(p: P) -> Self {
+        Resumed::One(p)
+    }
+}
+
+impl<P> From<Option<P>> for Resumed<P> {
+    fn from(p: Option<P>) -> Self {
+        if let Some(p) = p {
+            Resumed::One(p)
+        } else {
+            Resumed::None
+        }
+    }
+}
+
+impl<P> Default for Resumed<P> {
+    fn default() -> Self {
+        Resumed::None
+    }
+}
+
+pub struct ResumedIter<P>(Resumed<P>);
+
+impl<P> Iterator for ResumedIter<P> {
+    type Item = P;
+    fn next(&mut self) -> Option<P> {
+        match std::mem::take(&mut self.0) {
+            Resumed::None => None,
+            Resumed::One(p) => {
+                self.0 = Resumed::None;
+                Some(p)
+            }
+            Resumed::Two(p, q) => {
+                self.0 = Resumed::One(q);
+                Some(p)
+            }
+        }
+    }
+}
+
+impl<P> IntoIterator for Resumed<P> {
+    type Item = P;
+    type IntoIter = ResumedIter<P>;
+    fn into_iter(self) -> Self::IntoIter {
+        ResumedIter(self)
+    }
+}
+
 /// Result of `push` on a queue.
 #[derive(Debug, PartialEq, Eq)]
 pub enum PushResult<P> {
@@ -27,8 +94,8 @@ pub enum PushResult<P> {
     Full,
     /// The element was pushed.
     Pushed {
-        /// Optionally resumed process.
-        resumed: Option<P>,
+        /// Processes to resume.
+        resumed: Resumed<P>,
     },
 }
 
@@ -90,10 +157,12 @@ impl<'a, T: std::fmt::Debug, P> Queue<'a, T, P> {
         if self.elements.len() < self.capacity {
             self.elements.push_back(element);
             PushResult::Pushed {
-                resumed: self
-                    .waiting_to_pop
-                    .pop_front()
-                    .map(|callback| callback.process(self.elements.pop_front().unwrap())),
+                resumed: Resumed::new(
+                    process,
+                    self.waiting_to_pop
+                        .pop_front()
+                        .map(|callback| callback.process(self.elements.pop_front().unwrap())),
+                ),
             }
         } else {
             self.waiting_to_push.push_back((element, process));
@@ -109,10 +178,11 @@ impl<'a, T: std::fmt::Debug, P> Queue<'a, T, P> {
         if self.elements.len() < self.capacity {
             self.elements.push_back(element);
             PushResult::Pushed {
-                resumed: self
-                    .waiting_to_pop
-                    .pop_front()
-                    .map(|callback| callback.process(self.elements.pop_front().unwrap())),
+                resumed: Resumed::from(
+                    self.waiting_to_pop
+                        .pop_front()
+                        .map(|callback| callback.process(self.elements.pop_front().unwrap())),
+                ),
             }
         } else {
             log::warn!("Dropping element: {:?}", element);
@@ -170,7 +240,9 @@ mod test {
         let mut queue = MockQueue::new();
         assert_eq!(
             queue.push('a', MockProcess::Empty(1)),
-            Pushed { resumed: None }
+            Pushed {
+                resumed: Resumed::from(MockProcess::Empty(1))
+            }
         );
         assert_eq!(queue.elements, VecDeque::from(vec!['a']));
         assert!(queue.waiting_to_pop.is_empty());
@@ -185,7 +257,9 @@ mod test {
         };
         assert_eq!(
             queue.push('z', MockProcess::Empty(1)),
-            Pushed { resumed: None }
+            Pushed {
+                resumed: Resumed::from(MockProcess::Empty(1))
+            }
         );
         assert_eq!(queue.elements, VecDeque::from(vec!['a', 'b', 'c', 'z']));
         assert!(queue.waiting_to_pop.is_empty());
@@ -218,7 +292,10 @@ mod test {
         assert_eq!(
             queue.push('c', MockProcess::Empty(1)),
             Pushed {
-                resumed: Some(MockProcess::WithValue(123, 'a'))
+                resumed: Resumed::new(
+                    MockProcess::Empty(1),
+                    Some(MockProcess::WithValue(123, 'a'))
+                )
             }
         );
         assert_eq!(queue.elements, VecDeque::from(vec!['b', 'c']));
@@ -229,7 +306,12 @@ mod test {
     #[test]
     fn test_push_or_drop_on_empty() {
         let mut queue = MockQueue::new();
-        assert_eq!(queue.push_or_drop('a'), Pushed { resumed: None });
+        assert_eq!(
+            queue.push_or_drop('a'),
+            Pushed {
+                resumed: Resumed::None
+            }
+        );
         assert_eq!(queue.elements, VecDeque::from(vec!['a']));
         assert!(queue.waiting_to_pop.is_empty());
     }
@@ -240,7 +322,12 @@ mod test {
             elements: VecDeque::from(vec!['a', 'b', 'c']),
             ..Default::default()
         };
-        assert_eq!(queue.push_or_drop('z'), Pushed { resumed: None });
+        assert_eq!(
+            queue.push_or_drop('z'),
+            Pushed {
+                resumed: Resumed::None
+            }
+        );
         assert_eq!(queue.elements, VecDeque::from(vec!['a', 'b', 'c', 'z']));
         assert!(queue.waiting_to_pop.is_empty());
     }
@@ -270,7 +357,7 @@ mod test {
         assert_eq!(
             queue.push_or_drop('c'),
             Pushed {
-                resumed: Some(MockProcess::WithValue(123, 'a'))
+                resumed: Resumed::from(MockProcess::WithValue(123, 'a'))
             }
         );
         assert_eq!(queue.elements, VecDeque::from(vec!['b', 'c']));

@@ -28,6 +28,6 @@ impl<'a> App<'a> {
     }
 
     pub fn prev(&mut self) {
-        self.sim.step_back();
+        if let Err(_) = self.sim.step_back() {}
     }
 }

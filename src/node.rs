@@ -1,8 +1,7 @@
 //! Represents a node in the simulation.
 
 use crate::{
-    process::Runnable, query::Query, queue::ProcessCallback, Effect, Event, NodeId, Process,
-    ShardId,
+    process::Runnable, query::Query, queue::ProcessCallback, Effect, NodeId, Process, ShardId,
 };
 use std::rc::Rc;
 use std::time::Duration;
@@ -51,13 +50,11 @@ impl<'a> Runnable for Node<'a> {
                     .retrieval_times
                     .get(usize::from(shard))
                     .expect("Shard ID out of bounds");
-                Effect::Schedule(Event::new(
-                    (self.duration_from_u64)(retrieval_time),
-                    Process::Node {
-                        id: self.id,
-                        stage: GetQuery,
-                    },
-                ))
+                Effect::Aggregate {
+                    timeout: (self.duration_from_u64)(retrieval_time),
+                    node: self.id,
+                    query,
+                }
             }
         }
     }

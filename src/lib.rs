@@ -53,6 +53,8 @@ pub use im_status::Status;
 
 pub mod logger;
 
+const EPSILON: Duration = Duration::from_nanos(1);
+
 /// Shard ID.
 #[derive(Id, Debug, PartialEq, PartialOrd, Eq, Ord, Serialize, Deserialize, Copy, Clone, Hash)]
 pub struct ShardId(usize);
@@ -79,7 +81,7 @@ pub struct ReplicaId {
 }
 
 /// Represents a process being part of the simulation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Process {
     /// See [`QueryGenerator`](struct.QueryGenerator.html).
     QueryGenerator(QueryGeneratorStage),
@@ -95,7 +97,7 @@ pub enum Process {
 }
 
 /// An event is simply a process to run and a time to run it on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Event {
     time: Duration,
     process: Process,
@@ -120,7 +122,7 @@ impl Ord for Event {
 }
 
 /// Request to route a query to a certain node to process a certain shard.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Copy, Clone)]
 pub struct NodeRequest {
     id: NodeId,
     shard: ShardId,
@@ -150,11 +152,7 @@ pub enum Effect<'a> {
     /// to the callback and the resulting process is scheduled. Otherwise, the callback
     /// must wait until a query appears in the query to be popped.
     QueryQueueGet(queue::ProcessCallback<'a, Query, Process>),
-    /// This effect does two things:
-    /// 1. Schedules `query` to be sent to replica `nodes` after `timeout`.
-    /// 2. Schedules the broker's `GetQuery` stage.
-    /// **Note**: Eventually, when multiple brokers are supported, this will also need
-    ///           to receive the broker's ID.
+    /// TODO
     Route {
         /// Time to wait before sending requests to nodes.
         timeout: Duration,
@@ -162,6 +160,13 @@ pub enum Effect<'a> {
         query: Query,
         /// Description of nodes, see [`NodeRequest`](struct.NodeRequest.html).
         nodes: Vec<NodeRequest>,
+    },
+    /// TODO
+    Dispatch {
+        /// Nodes where the query is being dispatched to.
+        nodes: Vec<NodeRequest>,
+        /// Query that is being dispatched.
+        query: Query,
     },
     /// Similar to `QueryQueueGet` but from a node entry queue.
     NodeQueryGet {
@@ -184,16 +189,15 @@ pub enum Effect<'a> {
 macro_rules! push_query {
     ($s:expr, $time:expr, $queue:expr, $query:expr, $process:expr) => {
         if let PushResult::Pushed { resumed } = $queue.push($query, $process) {
-            $s.schedule($time, $process);
-            if let Some(resumed) = resumed {
-                $s.schedule($time, resumed);
+            for process in resumed {
+                $s.schedule($time, process);
             }
         }
     };
     ($s:expr, $time:expr, $queue:expr, $query:expr) => {
         if let PushResult::Pushed { resumed } = $queue.push_or_drop($query) {
-            if let Some(resumed) = resumed {
-                $s.schedule($time, resumed);
+            for process in resumed {
+                $s.schedule($time, process);
             }
             true
         } else {
@@ -347,9 +351,165 @@ impl<'a> QueryRoutingSimulation<'a> {
         }
     }
 
+    fn log_event(&self, time: Duration, process: &Process) {
+        match process {
+            Process::QueryGenerator(stage) => match stage {
+                QueryGeneratorStage::Generate => {
+                    log::debug!("[{:?}] Generating query", time);
+                }
+                QueryGeneratorStage::Timeout => {
+                    log::debug!("[{:?}] Waiting to generate another query", time);
+                }
+            },
+            Process::Broker(stage) => match stage {
+                BrokerStage::RequestQuery => {
+                    log::debug!("[{:?}] Broker waiting for incoming query", time);
+                }
+                BrokerStage::Select(query) => {
+                    log::debug!(
+                        "[{:?}] [{}] Broker selecting shard and replicas",
+                        time,
+                        query,
+                    );
+                }
+                BrokerStage::Dispatch { nodes, query } => {
+                    for node in nodes {
+                        log::debug!(
+                            "[{:?}] [{}] Dispatching to node {} for shard {}",
+                            time,
+                            query,
+                            node.id,
+                            node.shard,
+                        );
+                    }
+                }
+            },
+            Process::Node { id, stage } => match stage {
+                NodeStage::Retrieval(query, shard) => {
+                    log::debug!(
+                        "[{:?}] [{}] Picked up by node {:?} for shard {:?}",
+                        time,
+                        query,
+                        id,
+                        shard
+                    );
+                }
+                NodeStage::GetQuery => {
+                    log::debug!("[{:?}] Node {} waiting for incoming query", time, id);
+                }
+            },
+        };
+    }
+
+    fn run_process(
+        &self,
+        time: Duration,
+        process: Process,
+        status: Status,
+    ) -> (Effect<'a>, Status) {
+        match process {
+            Process::QueryGenerator(stage) => (self.query_generator.run(stage), status),
+            Process::Broker(stage) => {
+                let status = if let &BrokerStage::Select(query) = &stage {
+                    status.pick_up_query(query, time)
+                } else {
+                    status
+                };
+                (self.broker.run(stage), status)
+            }
+            Process::Node { id, stage } => (
+                self.nodes
+                    .get(usize::from(id))
+                    .expect("Node ID out of bounds")
+                    .node
+                    .run(stage),
+                status,
+            ),
+        }
+    }
+
+    fn handle_effect(&mut self, time: Duration, effect: Effect<'a>, status: Status) -> Status {
+        use Effect::*;
+        match effect {
+            Schedule(event) => {
+                self.schedule(time + event.time, event.process);
+                status
+            }
+            ScheduleMany(events) => {
+                for event in events {
+                    self.schedule(time + event.time, event.process);
+                }
+                status
+            }
+            QueryQueuePut(query, process) => {
+                push_query!(self, time, self.incoming_queries, query, process);
+                log::debug!("[{:?}] [{}] Enters incoming queue", time, query);
+                status.enter_query(query, time)
+            }
+            QueryQueueGet(callback) => {
+                pop_query!(self, time, self.incoming_queries, callback);
+                status
+            }
+            Route {
+                timeout,
+                query,
+                nodes,
+            } => {
+                self.schedule(
+                    time + timeout + EPSILON,
+                    Process::Broker(BrokerStage::RequestQuery),
+                );
+                self.schedule(
+                    time + timeout,
+                    Process::Broker(BrokerStage::Dispatch { nodes, query }),
+                );
+                status
+            }
+            Dispatch { nodes, query } => {
+                let mut status = status.dispatch_query(query, time, nodes.len());
+                for node in nodes {
+                    let queue = &mut self
+                        .nodes
+                        .get_mut(usize::from(node.id))
+                        .expect("Node ID out of bounds")
+                        .entry_queue;
+                    if !push_query!(self, time, queue, (query, node.shard)) {
+                        status = status.drop_shard(query, time);
+                    }
+                }
+                status
+            }
+            NodeQueryGet { node, callback } => {
+                pop_query!(
+                    self,
+                    time,
+                    self.nodes
+                        .get_mut(usize::from(node))
+                        .expect("Node ID out of bounds")
+                        .entry_queue,
+                    callback
+                );
+                status
+            }
+            Aggregate {
+                timeout,
+                query,
+                node,
+            } => {
+                self.schedule(
+                    time + timeout,
+                    Process::Node {
+                        id: node,
+                        stage: NodeStage::GetQuery,
+                    },
+                );
+                status.finish_shard(query, time)
+            }
+        }
+    }
+
     /// Advance the simulation
     pub fn advance(&mut self) {
-        use Effect::*;
         if let Some(next) = self.next_steps.pop() {
             self.history.push(next);
             return;
@@ -357,120 +517,22 @@ impl<'a> QueryRoutingSimulation<'a> {
         if let Some(Reverse(Event { time, process })) = self.scheduled_events.pop() {
             assert!(
                 self.status().time() <= time,
-                "Current event scheduled at time {:?}, which is earlier than current time {:?}",
+                "Current event scheduled at time {:?}, which is earlier than current time {:?}: {:?}",
                 time,
-                self.status().time()
+                self.status().time(),
+                Event { time, process },
             );
 
-            let mut status: Option<Status> = None;
-            let current_status = self.status().clone();
-            let current_status = move || Some(current_status.clone());
-
-            let effect = match process {
-                Process::QueryGenerator(stage) => self.query_generator.run(stage),
-                Process::Broker(stage) => {
-                    if let &BrokerStage::Route(query) = &stage {
-                        status = status
-                            .or_else(&current_status)
-                            .map(|s| s.pick_up_query(query, time));
-                    } else {
-                        log::debug!("[{:?}] Broker waiting for incoming query", time);
-                    }
-                    self.broker.run(stage)
-                }
-                Process::Node { id, stage } => {
-                    log::debug!("[{:?}] Node {} waiting for incoming query", time, id);
-                    self.nodes
-                        .get(usize::from(id))
-                        .expect("Node ID out of bounds")
-                        .node
-                        .run(stage)
-                }
-            };
-            match effect {
-                Schedule(event) => {
-                    self.schedule(time + event.time, event.process);
-                }
-                ScheduleMany(events) => {
-                    for event in events {
-                        self.schedule(time + event.time, event.process);
-                    }
-                }
-                QueryQueuePut(query, process) => {
-                    status = status
-                        .or_else(&current_status)
-                        .map(|s| s.enter_query(query, time));
-                    push_query!(self, time, self.incoming_queries, query, process);
-                }
-                QueryQueueGet(callback) => {
-                    pop_query!(self, time, self.incoming_queries, callback);
-                }
-                Route {
-                    timeout,
-                    query,
-                    nodes,
-                } => {
-                    self.schedule(time + timeout, Process::Broker(BrokerStage::RequestQuery));
-                    status = status
-                        .or_else(&current_status)
-                        .map(|s| s.dispatch_query(query, time + timeout, nodes.len()));
-                    for NodeRequest { id, shard } in nodes {
-                        log::debug!(
-                            "[{:?}] [{}] Dispatched to ({:?}, {:?})",
-                            time,
-                            query,
-                            id,
-                            shard
-                        );
-                        let queue = &mut self
-                            .nodes
-                            .get_mut(usize::from(id))
-                            .expect("Node ID out of bounds")
-                            .entry_queue;
-                        if !push_query!(self, time, queue, (query, shard)) {
-                            status = status
-                                .or_else(&current_status)
-                                .map(|s| s.drop_shard(query, time + timeout));
-                        }
-                    }
-                }
-                NodeQueryGet { node, callback } => {
-                    pop_query!(
-                        self,
-                        time,
-                        self.nodes
-                            .get_mut(usize::from(node))
-                            .expect("Node ID out of bounds")
-                            .entry_queue,
-                        callback
-                    );
-                }
-                Aggregate {
-                    timeout,
-                    query,
-                    node,
-                } => {
-                    status = status
-                        .or_else(current_status)
-                        .map(|s| s.finish_shard(query, time + timeout));
-                    self.schedule(
-                        time + timeout,
-                        Process::Node {
-                            id: node,
-                            stage: NodeStage::GetQuery,
-                        },
-                    );
-                }
-            }
-            if let Some(status) = status {
-                let status = status.log_events(
+            self.log_event(time, &process);
+            let (effect, status) = self.run_process(time, process, self.status().clone());
+            let status = self.handle_effect(time, effect, status);
+            self.history.push(
+                status.log_events(
                     logger::clear()
                         .expect("Unable to retrieve logs")
                         .into_iter(),
-                );
-                log::info!("----- {:?} -----", status.time());
-                self.history.push(status);
-            }
+                ),
+            );
         }
     }
 
@@ -538,7 +600,7 @@ mod test {
 
     #[test]
     fn test_event_order() {
-        let proc = Process::Broker(BrokerStage::RequestQuery);
+        let proc = || Process::Broker(BrokerStage::RequestQuery);
         assert_eq!(
             Event::new(
                 Duration::from_secs(1),
@@ -550,30 +612,32 @@ mod test {
             )
         );
         assert!(
-            Event::new(Duration::from_secs(1), proc).cmp(&Event::new(Duration::from_secs(1), proc))
+            Event::new(Duration::from_secs(1), proc())
+                .cmp(&Event::new(Duration::from_secs(1), proc()))
                 == Ordering::Equal
         );
         assert!(
-            Event::new(Duration::new(1, 1), proc).cmp(&Event::new(Duration::from_secs(1), proc))
+            Event::new(Duration::new(1, 1), proc())
+                .cmp(&Event::new(Duration::from_secs(1), proc()))
                 == Ordering::Greater
         );
         assert!(
-            Event::new(Duration::new(1, 1), proc).cmp(&Event::new(Duration::new(1, 2), proc))
+            Event::new(Duration::new(1, 1), proc()).cmp(&Event::new(Duration::new(1, 2), proc()))
                 == Ordering::Less
         );
         assert!(
-            Event::new(Duration::from_secs(1), proc)
-                .partial_cmp(&Event::new(Duration::from_secs(1), proc))
+            Event::new(Duration::from_secs(1), proc())
+                .partial_cmp(&Event::new(Duration::from_secs(1), proc()))
                 == Some(Ordering::Equal)
         );
         assert!(
-            Event::new(Duration::new(1, 1), proc)
-                .partial_cmp(&Event::new(Duration::from_secs(1), proc))
+            Event::new(Duration::new(1, 1), proc())
+                .partial_cmp(&Event::new(Duration::from_secs(1), proc()))
                 == Some(Ordering::Greater)
         );
         assert!(
-            Event::new(Duration::new(1, 1), proc)
-                .partial_cmp(&Event::new(Duration::new(1, 2), proc))
+            Event::new(Duration::new(1, 1), proc())
+                .partial_cmp(&Event::new(Duration::new(1, 2), proc()))
                 == Some(Ordering::Less)
         );
     }

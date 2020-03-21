@@ -1,8 +1,8 @@
 brokers: 2
 cpus_per_node: 1
 query_distribution:
-    mean: 1000
-    std: 50
+    mean: 200
+    std: 20
 time_unit: micro
 assignment:
     - [0.50, 0.50, 0.00, 0.00]

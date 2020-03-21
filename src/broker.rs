@@ -8,12 +8,19 @@ use crate::{
 };
 
 /// Entry points to the broker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BrokerStage {
     /// Request a query from an incoming query queue.
     RequestQuery,
+    /// Select shards and replicas.
+    Select(Query),
     /// Route the query to replica nodes.
-    Route(Query),
+    Dispatch {
+        /// Where the query goes.
+        nodes: Vec<NodeRequest>,
+        /// The query being dispatched.
+        query: Query,
+    },
 }
 
 /// Broker process.
@@ -45,11 +52,9 @@ impl<'a> Runnable for Broker<'a> {
         use BrokerStage::*;
         match entry {
             RequestQuery => {
-                //log::info!("[Broker] requesting a query from incoming queue");
-                Effect::QueryQueueGet(ProcessCallback::new(|q| Process::Broker(Route(q))))
+                Effect::QueryQueueGet(ProcessCallback::new(|q| Process::Broker(Select(q))))
             }
-            Route(query) => {
-                //trace!("[Broker] picked up a query");
+            Select(query) => {
                 let ShardSelection {
                     time: shard_selection_time,
                     shards,
@@ -59,7 +64,6 @@ impl<'a> Runnable for Broker<'a> {
                     replicas,
                 } = self.replica_selector.select(query, shards);
                 let timeout = shard_selection_time + replica_selection_time;
-                //trace!("[Broker] selected shards in {:?}", &timeout);
                 Effect::Route {
                     timeout,
                     query,
@@ -69,6 +73,7 @@ impl<'a> Runnable for Broker<'a> {
                         .collect(),
                 }
             }
+            Dispatch { nodes, query } => Effect::Dispatch { nodes, query },
         }
     }
 }
@@ -98,7 +103,7 @@ mod test {
         if let Effect::QueryQueueGet(callback) = broker.run(BrokerStage::RequestQuery) {
             assert_eq!(
                 callback.process(test_query()),
-                Process::Broker(BrokerStage::Route(test_query()))
+                Process::Broker(BrokerStage::Select(test_query()))
             );
         } else {
             panic!("The returned effect doesn't match the expected one");
@@ -126,7 +131,7 @@ mod test {
             timeout,
             query,
             nodes,
-        } = broker.run(BrokerStage::Route(test_query()))
+        } = broker.run(BrokerStage::Select(test_query()))
         {
             assert_eq!(timeout, Duration::new(0, 17));
             assert_eq!(query, test_query());
