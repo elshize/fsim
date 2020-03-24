@@ -313,7 +313,8 @@ impl<'a> App<'a> {
     fn queries_snapshot<'q>(
         queries: impl Iterator<Item = &'q (Query, QueryStatus)>,
     ) -> Vec<(Query, QueryStatus)> {
-        let queries: Vec<_> = queries.copied().collect();
+        let mut queries: Vec<_> = queries.copied().collect();
+        queries.sort_by_key(|(q, _)| *q);
         queries
     }
 
