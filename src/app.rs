@@ -1,6 +1,7 @@
 use fsim::{Query, QueryRoutingSimulation, QueryStatus};
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Duration;
 use tui::layout::Rect;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -286,6 +287,7 @@ pub struct App<'a> {
     pub snapshot: Snapshot,
     pub window: Window,
     pub frames: Frames,
+    log_history_size: usize,
 }
 
 impl<'a> App<'a> {
@@ -295,6 +297,14 @@ impl<'a> App<'a> {
             snapshot: Snapshot::default(),
             window: Window::Main(View::Stats, Mode::Navigation),
             frames: Frames::default(),
+            log_history_size: 1000,
+        }
+    }
+
+    pub fn with_log_history_size(self, n: usize) -> Self {
+        Self {
+            log_history_size: n,
+            ..self
         }
     }
 
@@ -322,16 +332,40 @@ impl<'a> App<'a> {
         self.snapshot = Snapshot {
             active_queries: Self::queries_snapshot(self.sim.status().active()),
             finished_queries: Self::queries_snapshot(self.sim.status().finished()),
-            logs: self.sim.status().logs().cloned().collect(),
+            logs: self
+                .sim
+                .status()
+                .logs()
+                .cloned()
+                .rev()
+                .take(self.log_history_size)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect(),
         };
     }
 
-    pub fn next(&mut self) {
+    pub fn next_step(&mut self) {
         self.sim.step_forward();
         self.update_snapshot();
     }
 
-    pub fn prev(&mut self) {
+    pub fn prev_step(&mut self) {
+        if let Ok(_) = self.sim.step_back() {
+            self.update_snapshot();
+        }
+    }
+
+    pub fn next_second(&mut self) {
+        let now = self.sim.status().time();
+        while self.sim.status().time() - now < Duration::from_secs(1) {
+            self.sim.step_forward();
+        }
+        self.update_snapshot();
+    }
+
+    pub fn prev_second(&mut self) {
         if let Ok(_) = self.sim.step_back() {
             self.update_snapshot();
         }
@@ -361,10 +395,10 @@ mod test {
             let mut history_size = 1;
             for forward in sequence {
                 if forward {
-                    app.next();
+                    app.next_step();
                     history_size += 1;
                 } else {
-                    app.prev();
+                    app.prev_step();
                     history_size = std::cmp::max(history_size - 1, 1);
                 }
                 assert_eq!(app.sim.history().collect::<Vec<_>>().len(), history_size);

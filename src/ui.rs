@@ -90,6 +90,13 @@ fn render_stats<'a, B: Backend>(
             String::from("Active"),
             format!("{:?}", status.queries_active()),
         ],
+        vec![
+            String::from("Throughput"),
+            match status.time().as_secs_f32() {
+                s if s == 0.0 => format!("?"),
+                s => format!("{}", (status.queries_finished() as f32) / s),
+            },
+        ],
     ];
     let mut table = Table::new(
         [""].iter(),
@@ -206,7 +213,7 @@ impl<'a> App<'a> {
                 let right_layout = Layout::default()
                     .direction(Direction::Vertical)
                     .margin(0)
-                    .constraints([Constraint::Length(10), Constraint::Percentage(50)].as_ref())
+                    .constraints([Constraint::Length(11), Constraint::Percentage(50)].as_ref())
                     .split(main_layout[1]);
                 self.frames.set_frame(View::Stats, right_layout[0]);
                 self.frames.set_frame(View::Logs(None), right_layout[1]);

@@ -6,6 +6,15 @@ use strum_macros::EnumIter;
 use termion::event::Key;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter)]
+pub enum GlobalAction {
+    Exit,
+    NextStep,
+    PrevStep,
+    NextSecond,
+    PrevSecond,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter)]
 pub enum NavigationAction {
     Left,
     Right,
@@ -22,10 +31,13 @@ pub enum ActivePaneAction {
     ItemUp,
     PageDown,
     PageUp,
+    Home,
+    End,
     Details,
 }
 
 pub struct KeyBindings {
+    global_bindings: HashMap<Key, GlobalAction>,
     navigation_bindings: HashMap<Key, NavigationAction>,
     active_pane_bindings: HashMap<Key, ActivePaneAction>,
 }
@@ -54,11 +66,26 @@ impl Default for KeyBindings {
             (Key::Down, ActivePaneAction::ItemDown),
             (Key::PageUp, ActivePaneAction::PageUp),
             (Key::PageDown, ActivePaneAction::PageDown),
+            (Key::Home, ActivePaneAction::Home),
+            (Key::End, ActivePaneAction::End),
             (Key::Char('k'), ActivePaneAction::ItemUp),
             (Key::Char('j'), ActivePaneAction::ItemDown),
             (Key::Ctrl('u'), ActivePaneAction::PageUp),
             (Key::Ctrl('d'), ActivePaneAction::PageDown),
             (Key::Char('\n'), ActivePaneAction::Details),
+            (Key::Char('g'), ActivePaneAction::Home),
+            (Key::Char('G'), ActivePaneAction::End),
+        ]
+        .iter()
+        .copied()
+        .collect();
+        let global_bindings: HashMap<Key, GlobalAction> = [
+            (Key::Ctrl('c'), GlobalAction::Exit),
+            (Key::Ctrl('q'), GlobalAction::Exit),
+            (Key::Char(','), GlobalAction::PrevStep),
+            (Key::Char('.'), GlobalAction::NextStep),
+            (Key::Char('<'), GlobalAction::PrevSecond),
+            (Key::Char('>'), GlobalAction::NextSecond),
         ]
         .iter()
         .copied()
@@ -66,11 +93,20 @@ impl Default for KeyBindings {
         Self {
             navigation_bindings,
             active_pane_bindings,
+            global_bindings,
         }
     }
 }
 
 impl KeyBindings {
+    /// Iterates over navigation mode bindings for a given action.
+    pub fn global_bindings<'a>(&'a self, action: GlobalAction) -> impl Iterator<Item = Key> + 'a {
+        self.global_bindings
+            .iter()
+            .filter_map(move |(k, a)| if *a == action { Some(k) } else { None })
+            .copied()
+    }
+
     /// Iterates over navigation mode bindings for a given action.
     pub fn navigation_bindings<'a>(
         &'a self,
@@ -105,6 +141,10 @@ impl<'a> KeyHandler<'a> {
             app,
             bindings: KeyBindings::default(),
         }
+    }
+
+    pub fn global_action(&self, key: Key) -> Result<GlobalAction, Key> {
+        self.bindings.global_bindings.get(&key).copied().ok_or(key)
     }
 
     /// Handle keys in navigation mode (selecting pane).
@@ -151,6 +191,22 @@ impl<'a> KeyHandler<'a> {
                 view.move_selection(VerticalDirection::PageUp, Rc::clone(&self.app)),
                 Mode::ActivePane,
             ),
+            Some(Home) => {
+                let len = view.list_length(&self.app.borrow().snapshot);
+                if len == 0 {
+                    Window::Main(view, Mode::ActivePane)
+                } else {
+                    Window::Main(view.select(0), Mode::ActivePane)
+                }
+            }
+            Some(End) => {
+                let len = view.list_length(&self.app.borrow().snapshot);
+                if len == 0 {
+                    Window::Main(view, Mode::ActivePane)
+                } else {
+                    Window::Main(view.select(len - 1), Mode::ActivePane)
+                }
+            }
             Some(Details) => Window::Main(view.details(), Mode::ActivePane),
             None => Window::Main(view, Mode::ActivePane),
         }
@@ -180,6 +236,22 @@ impl<'a> KeyHandler<'a> {
             Some(PageUp) => Window::Maximized(
                 view.move_selection(VerticalDirection::PageUp, Rc::clone(&self.app)),
             ),
+            Some(Home) => {
+                let len = view.list_length(&self.app.borrow().snapshot);
+                if len == 0 {
+                    Window::Maximized(view)
+                } else {
+                    Window::Maximized(view.select(0))
+                }
+            }
+            Some(End) => {
+                let len = view.list_length(&self.app.borrow().snapshot);
+                if len == 0 {
+                    Window::Maximized(view)
+                } else {
+                    Window::Maximized(view.select(len - 1))
+                }
+            }
             Some(Details) => Window::Maximized(view.details()),
             None => Window::Maximized(view),
         }

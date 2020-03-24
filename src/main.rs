@@ -32,7 +32,7 @@ use app::{App, Mode, View, Window};
 mod event;
 mod keys;
 mod ui;
-use keys::{ActivePaneAction, KeyBindings, KeyHandler, NavigationAction};
+use keys::{ActivePaneAction, GlobalAction, KeyBindings, KeyHandler, NavigationAction};
 
 #[derive(Debug, StructOpt)]
 struct Opt {
@@ -50,6 +50,9 @@ struct Opt {
     #[structopt(long)]
     /// Print key bindings.
     key_bindings: bool,
+    #[structopt(long, default_value = "1000")]
+    /// Print out up to this many log entries at a time.
+    log_history_size: usize,
 }
 
 struct Input<'a>(Box<dyn BufRead + 'a>);
@@ -80,6 +83,13 @@ fn run(opt: Opt) -> Result<()> {
 
     if opt.key_bindings {
         let keys = KeyBindings::default();
+        println!("--- Global ---");
+        for action in GlobalAction::iter() {
+            println!("{:?}", action);
+            for key in keys.global_bindings(action) {
+                println!("\t{}", format_key(key));
+            }
+        }
         println!("--- Navigation Mode ---");
         for action in NavigationAction::iter() {
             println!("{:?}", action);
@@ -111,9 +121,10 @@ fn run(opt: Opt) -> Result<()> {
             .into_iter()
             .map(|elem| elem.context("Failed to parse query"))
             .collect();
-    let app = Rc::new(RefCell::new(App::new(QueryRoutingSimulation::from_config(
-        config, queries?,
-    ))));
+    let app = Rc::new(RefCell::new(
+        App::new(QueryRoutingSimulation::from_config(config, queries?))
+            .with_log_history_size(opt.log_history_size),
+    ));
     let events = Events::with_config(event::Config {
         tick_rate: Duration::from_millis(200),
         exit_key: Key::Null,
@@ -133,21 +144,31 @@ fn run(opt: Opt) -> Result<()> {
         terminal.draw(|mut f| app.borrow_mut().draw(&mut f))?;
 
         app.borrow_mut().window = match events.next()? {
-            Event::Input(Key::Ctrl('c')) => {
-                break;
-            }
-            Event::Input(Key::Char('>')) => {
-                app.borrow_mut().next();
-                app.borrow().window
-            }
-            Event::Input(Key::Char('<')) => {
-                app.borrow_mut().prev();
-                app.borrow().window
-            }
-            Event::Input(key) => match app.borrow().window {
-                Window::Main(view, Navigation) => key_handler.handle_navigation(view, key),
-                Window::Main(view, ActivePane) => key_handler.handle_active_pane(view, key),
-                Window::Maximized(view) => key_handler.handle_maximized(view, key),
+            Event::Input(key) => match key_handler.global_action(key) {
+                Ok(GlobalAction::Exit) => {
+                    break;
+                }
+                Ok(GlobalAction::NextStep) => {
+                    app.borrow_mut().next_step();
+                    app.borrow().window
+                }
+                Ok(GlobalAction::PrevStep) => {
+                    app.borrow_mut().prev_step();
+                    app.borrow().window
+                }
+                Ok(GlobalAction::NextSecond) => {
+                    app.borrow_mut().next_second();
+                    app.borrow().window
+                }
+                Ok(GlobalAction::PrevSecond) => {
+                    app.borrow_mut().prev_second();
+                    app.borrow().window
+                }
+                Err(key) => match app.borrow().window {
+                    Window::Main(view, Navigation) => key_handler.handle_navigation(view, key),
+                    Window::Main(view, ActivePane) => key_handler.handle_active_pane(view, key),
+                    Window::Maximized(view) => key_handler.handle_maximized(view, key),
+                },
             },
             Event::Tick => app.borrow().window,
         };

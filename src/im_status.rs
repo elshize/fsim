@@ -161,7 +161,7 @@ impl Status {
     }
 
     /// Iterates over log events.
-    pub fn logs(&self) -> impl Iterator<Item = &String> {
+    pub fn logs(&self) -> impl DoubleEndedIterator<Item = &String> {
         self.logs.iter()
     }
 
