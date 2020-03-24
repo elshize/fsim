@@ -39,7 +39,7 @@ pub enum View {
     /// Finished queries list.
     FinishedQueries(QueriesView),
     /// Log view.
-    Logs,
+    Logs(Option<usize>),
     /// Current simulation statistics.
     Stats,
 }
@@ -57,7 +57,7 @@ impl View {
         use View::*;
         match self {
             ActiveQueries(_) | FinishedQueries(_) => self,
-            Logs => FinishedQueries(QueriesView::default()),
+            Logs(_) => FinishedQueries(QueriesView::default()),
             Stats => ActiveQueries(QueriesView::default()),
         }
     }
@@ -66,8 +66,8 @@ impl View {
         use View::*;
         match self {
             ActiveQueries(_) => Stats,
-            FinishedQueries(_) => Logs,
-            Logs | Stats => self,
+            FinishedQueries(_) => Logs(None),
+            Logs(_) | Stats => self,
         }
     }
     /// Returns the view down (or self if at edge).
@@ -75,8 +75,8 @@ impl View {
         use View::*;
         match self {
             ActiveQueries(_) => FinishedQueries(QueriesView::default()),
-            Stats => Logs,
-            FinishedQueries(_) | Logs => self,
+            Stats => Logs(None),
+            FinishedQueries(_) | Logs(_) => self,
         }
     }
     /// Returns the view up (or self if at edge).
@@ -84,7 +84,7 @@ impl View {
         use View::*;
         match self {
             ActiveQueries(_) | Stats => self,
-            Logs => Stats,
+            Logs(_) => Stats,
             FinishedQueries(_) => ActiveQueries(QueriesView::default()),
         }
     }
@@ -94,9 +94,7 @@ impl View {
         use View::*;
         match self {
             ActiveQueries(QueriesView::List(idx)) | FinishedQueries(QueriesView::List(idx)) => idx,
-            Logs => {
-                None // TODO
-            }
+            Logs(item) => item,
             _ => None,
         }
     }
@@ -107,10 +105,19 @@ impl View {
         match self {
             ActiveQueries(QueriesView::List(_)) => snapshot.active_queries.len(),
             FinishedQueries(QueriesView::List(_)) => snapshot.finished_queries.len(),
-            Logs => {
-                0 // TODO
-            }
+            Logs(_) => snapshot.logs.len(),
             _ => unreachable!(),
+        }
+    }
+
+    pub fn activate(self, snapshot: &Snapshot) -> View {
+        use View::*;
+        match self {
+            Logs(_) => Logs(match snapshot.logs.len() {
+                0 => None,
+                len => Some(len - 1),
+            }),
+            _ => self.select(0),
         }
     }
 
@@ -119,10 +126,7 @@ impl View {
         use View::*;
         match self {
             ActiveQueries(QueriesView::List(_)) => ActiveQueries(QueriesView::List(Some(idx))),
-            Logs => {
-                // TODO
-                self
-            }
+            Logs(_) => Logs(Some(idx)),
             FinishedQueries(QueriesView::List(_)) => FinishedQueries(QueriesView::List(Some(idx))),
             _ => self,
         }
@@ -165,7 +169,9 @@ impl View {
     pub fn is_list(self) -> bool {
         use View::*;
         match self {
-            ActiveQueries(QueriesView::List(_)) | FinishedQueries(QueriesView::List(_)) => true,
+            ActiveQueries(QueriesView::List(_))
+            | FinishedQueries(QueriesView::List(_))
+            | Logs(_) => true,
             _ => false,
         }
     }
@@ -182,6 +188,7 @@ impl View {
             FinishedQueries(QueriesView::Details(item)) => {
                 FinishedQueries(QueriesView::List(Some(item)))
             }
+            Logs(_) => Logs(None),
             _ => self,
         }
     }
@@ -206,7 +213,7 @@ impl View {
         match (self, view) {
             (ActiveQueries(_), ActiveQueries(_))
             | (FinishedQueries(_), FinishedQueries(_))
-            | (Logs, Logs)
+            | (Logs(_), Logs(_))
             | (Stats, Stats) => self,
             _ => view,
         }
@@ -267,7 +274,7 @@ impl Frames {
             Stats => {
                 self.status = Some(frame);
             }
-            Logs => {
+            Logs(_) => {
                 self.logs = Some(frame);
             }
         }
@@ -296,7 +303,7 @@ impl<'a> App<'a> {
         match view {
             ActiveQueries(_) => self.frames.active.as_ref(),
             FinishedQueries(_) => self.frames.finished.as_ref(),
-            Logs => self.frames.logs.as_ref(),
+            Logs(_) => self.frames.logs.as_ref(),
             Stats => self.frames.status.as_ref(),
         }
         .map(|f| f.height)

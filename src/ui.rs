@@ -52,11 +52,14 @@ fn render_logs<'a, B: Backend>(
     rect: Rect,
     block: Block,
     logs: impl Iterator<Item = &'a String>,
+    selected: Option<usize>,
 ) {
     let items: Vec<_> = logs.collect();
+    let selected = selected.or_else(|| items.iter().enumerate().map(|(idx, _)| idx).last());
     let mut list = SelectableList::default()
         .block(block)
-        .select(items.iter().enumerate().map(|(idx, _)| idx).last())
+        .select(selected)
+        .highlight_style(Style::default().fg(Color::Blue))
         .items(&items);
     frame.render(&mut list, rect);
 }
@@ -160,8 +163,14 @@ impl<'a> App<'a> {
                     );
                 }
             },
-            View::Logs => {
-                render_logs(frame, rect, block("Logs", mode), self.snapshot.logs.iter());
+            View::Logs(selected) => {
+                render_logs(
+                    frame,
+                    rect,
+                    block("Logs", mode),
+                    self.snapshot.logs.iter(),
+                    selected,
+                );
             }
             View::Stats => {
                 render_stats(
@@ -200,7 +209,7 @@ impl<'a> App<'a> {
                     .constraints([Constraint::Length(10), Constraint::Percentage(50)].as_ref())
                     .split(main_layout[1]);
                 self.frames.set_frame(View::Stats, right_layout[0]);
-                self.frames.set_frame(View::Logs, right_layout[1]);
+                self.frames.set_frame(View::Logs(None), right_layout[1]);
                 self.frames
                     .set_frame(View::ActiveQueries(QueriesView::default()), left_layout[0]);
                 self.frames.set_frame(
@@ -218,10 +227,10 @@ impl<'a> App<'a> {
                 );
                 self.draw_view(
                     frame,
-                    view.match_or(View::Logs),
+                    view.match_or(View::Logs(None)),
                     right_layout[1],
                     match view {
-                        View::Logs => Some(mode),
+                        View::Logs(_) => Some(mode),
                         _ => None,
                     },
                 );

@@ -115,7 +115,9 @@ impl<'a> KeyHandler<'a> {
             Some(Up) => Window::Main(view.up(), Mode::Navigation),
             Some(Right) => Window::Main(view.right(), Mode::Navigation),
             Some(Down) => Window::Main(view.down(), Mode::Navigation),
-            Some(Enter) => Window::Main(view.select(0), Mode::ActivePane),
+            Some(Enter) => {
+                Window::Main(view.activate(&self.app.borrow().snapshot), Mode::ActivePane)
+            }
             None => Window::Main(view, Mode::Navigation),
         }
     }

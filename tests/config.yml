@@ -4,6 +4,7 @@ query_distribution:
     mean: 200
     std: 20
 time_unit: micro
+seed: 182374190
 assignment:
     - [0.50, 0.50, 0.00, 0.00]
     - [0.00, 0.00, 0.50, 0.50]

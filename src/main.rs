@@ -1,6 +1,5 @@
 //! This program starts a simulation. TODO: More docs to come.
 
-#![feature(or_patterns)]
 #![warn(
     missing_docs,
     trivial_casts,
