@@ -2,9 +2,10 @@ use super::{app::VerticalDirection, App, Mode, View, Window};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use strum_macros::EnumIter;
 use termion::event::Key;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter)]
 pub enum NavigationAction {
     Left,
     Right,
@@ -13,7 +14,7 @@ pub enum NavigationAction {
     Enter,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter)]
 pub enum ActivePaneAction {
     Back,
     Maximize,
@@ -28,6 +29,7 @@ pub struct KeyBindings {
     navigation_bindings: HashMap<Key, NavigationAction>,
     active_pane_bindings: HashMap<Key, ActivePaneAction>,
 }
+
 impl Default for KeyBindings {
     fn default() -> Self {
         use NavigationAction::*;
@@ -65,6 +67,30 @@ impl Default for KeyBindings {
             navigation_bindings,
             active_pane_bindings,
         }
+    }
+}
+
+impl KeyBindings {
+    /// Iterates over navigation mode bindings for a given action.
+    pub fn navigation_bindings<'a>(
+        &'a self,
+        action: NavigationAction,
+    ) -> impl Iterator<Item = Key> + 'a {
+        self.navigation_bindings
+            .iter()
+            .filter_map(move |(k, a)| if *a == action { Some(k) } else { None })
+            .copied()
+    }
+
+    /// Iterates over active pane mode bindings for a given action.
+    pub fn active_pane_bindings<'a>(
+        &'a self,
+        action: ActivePaneAction,
+    ) -> impl Iterator<Item = Key> + 'a {
+        self.active_pane_bindings
+            .iter()
+            .filter_map(move |(k, a)| if *a == action { Some(k) } else { None })
+            .copied()
     }
 }
 

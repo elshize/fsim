@@ -22,6 +22,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 use structopt::StructOpt;
+use strum::IntoEnumIterator;
 use termion::event::Key;
 use termion::raw::IntoRawMode;
 use tui::backend::TermionBackend;
@@ -32,13 +33,13 @@ use app::{App, Mode, View, Window};
 mod event;
 mod keys;
 mod ui;
-use keys::KeyHandler;
+use keys::{ActivePaneAction, KeyBindings, KeyHandler, NavigationAction};
 
 #[derive(Debug, StructOpt)]
 struct Opt {
     /// Simulation configuration file.
-    #[structopt(short, long)]
-    config: PathBuf,
+    #[structopt(short, long, required_unless("key-bindings"))]
+    config: Option<PathBuf>,
     /// Simulation configuration file.
     queries: Option<PathBuf>,
     #[structopt(short, long)]
@@ -47,6 +48,9 @@ struct Opt {
     #[structopt(long)]
     /// Print logs to a file.
     log_file: Option<PathBuf>,
+    #[structopt(long)]
+    /// Print key bindings.
+    key_bindings: bool,
 }
 
 struct Input<'a>(Box<dyn BufRead + 'a>);
@@ -63,8 +67,36 @@ impl<'a> Input<'a> {
     }
 }
 
+fn format_key(key: Key) -> String {
+    match key {
+        Key::Char('\n') => format!("Enter"),
+        Key::Char(c) => format!("{}", c),
+        Key::Ctrl(c) => format!("Ctrl+{}", c),
+        _ => format!("{:?}", key),
+    }
+}
+
 fn run(opt: Opt) -> Result<()> {
     use Mode::*;
+
+    if opt.key_bindings {
+        let keys = KeyBindings::default();
+        println!("--- Navigation Mode ---");
+        for action in NavigationAction::iter() {
+            println!("{:?}", action);
+            for key in keys.navigation_bindings(action) {
+                println!("\t{}", format_key(key));
+            }
+        }
+        println!("\n--- Active Pane Mode ---");
+        for action in ActivePaneAction::iter() {
+            println!("{:?}", action);
+            for key in keys.active_pane_bindings(action) {
+                println!("\t{}", format_key(key));
+            }
+        }
+        return Ok(());
+    }
 
     fsim::logger::LoggerBuilder::default()
         .level(if opt.trace {
@@ -74,7 +106,7 @@ fn run(opt: Opt) -> Result<()> {
         })
         .target("fsim")
         .init()?;
-    let config = Config::from_yaml(File::open(opt.config)?)?;
+    let config = Config::from_yaml(File::open(opt.config.unwrap())?)?;
     let queries: Result<Vec<fsim::config::Query>> =
         serde_json::Deserializer::from_reader(Input::new(opt.queries)?.reader())
             .into_iter()
