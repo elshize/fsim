@@ -12,6 +12,7 @@ use std::time::Duration;
 use termion::event::Key;
 use termion::input::TermRead;
 
+#[derive(Debug, Copy, Clone)]
 pub enum Event<I> {
     Input(I),
     Tick,

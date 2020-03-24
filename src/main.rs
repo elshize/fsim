@@ -1,5 +1,6 @@
 //! This program starts a simulation. TODO: More docs to come.
 
+#![feature(or_patterns)]
 #![warn(
     missing_docs,
     trivial_casts,
@@ -13,10 +14,12 @@
 use anyhow::{Context, Result};
 use event::{Event, Events};
 use fsim::{config::Config, QueryRoutingSimulation};
+use std::cell::RefCell;
 use std::fs::File;
 use std::io;
 use std::io::{stdin, BufRead, BufReader};
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::time::Duration;
 use structopt::StructOpt;
 use termion::event::Key;
@@ -25,9 +28,11 @@ use tui::backend::TermionBackend;
 use tui::Terminal;
 
 mod app;
-use app::{App, Component};
+use app::{App, Mode, View, Window};
 mod event;
+mod keys;
 mod ui;
+use keys::KeyHandler;
 
 #[derive(Debug, StructOpt)]
 struct Opt {
@@ -59,6 +64,8 @@ impl<'a> Input<'a> {
 }
 
 fn run(opt: Opt) -> Result<()> {
+    use Mode::*;
+
     fsim::logger::LoggerBuilder::default()
         .level(if opt.trace {
             log::LevelFilter::Trace
@@ -73,7 +80,9 @@ fn run(opt: Opt) -> Result<()> {
             .into_iter()
             .map(|elem| elem.context("Failed to parse query"))
             .collect();
-    let mut app = App::new(QueryRoutingSimulation::from_config(config, queries?));
+    let app = Rc::new(RefCell::new(App::new(QueryRoutingSimulation::from_config(
+        config, queries?,
+    ))));
     let events = Events::with_config(event::Config {
         tick_rate: Duration::from_millis(200),
         exit_key: Key::Null,
@@ -87,83 +96,30 @@ fn run(opt: Opt) -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
     terminal.hide_cursor()?;
 
-    loop {
-        terminal.draw(|mut f| ui::draw(&mut f, &app))?;
+    let key_handler = KeyHandler::new(Rc::clone(&app));
 
-        app.focus = match app.focus.take() {
-            None => match events.next()? {
-                Event::Input(key) => match key {
-                    Key::Ctrl('c') => {
-                        break;
-                    }
-                    Key::Left | Key::Char('h') | Key::Char(',') => {
-                        app.prev();
-                        None
-                    }
-                    Key::Right | Key::Char('l') | Key::Char('.') => {
-                        app.next();
-                        None
-                    }
-                    Key::Char('A') => {
-                        let mut queries: Vec<_> = app.sim.status().active().cloned().collect();
-                        queries.sort_by_key(|q| q.0.request);
-                        Some(Component::Active {
-                            queries,
-                            selected: 0,
-                        })
-                    }
-                    Key::Char('L') => Some(Component::Logs),
-                    _ => None,
-                },
-                Event::Tick => None,
+    loop {
+        terminal.draw(|mut f| app.borrow_mut().draw(&mut f))?;
+
+        app.borrow_mut().window = match events.next()? {
+            Event::Input(Key::Ctrl('c')) => {
+                break;
+            }
+            Event::Input(Key::Char('>')) => {
+                app.borrow_mut().next();
+                app.borrow().window
+            }
+            Event::Input(Key::Char('<')) => {
+                app.borrow_mut().prev();
+                app.borrow().window
+            }
+            Event::Input(key) => match app.borrow().window {
+                Window::Main(view, Navigation) => key_handler.handle_navigation(view, key),
+                Window::Main(view, ActivePane) => key_handler.handle_active_pane(view, key),
+                Window::Maximized(view) => key_handler.handle_maximized(view, key),
             },
-            Some(Component::Active { queries, selected }) => match events.next()? {
-                Event::Input(key) => match key {
-                    Key::Ctrl('c') => {
-                        break;
-                    }
-                    Key::Up | Key::Char('k') => Some(Component::Active {
-                        queries,
-                        selected: selected.checked_sub(1).unwrap_or(0),
-                    }),
-                    Key::Down | Key::Char('j') => Some(Component::Active {
-                        queries,
-                        selected: std::cmp::min(
-                            selected + 1,
-                            app.sim
-                                .status()
-                                .queries_active()
-                                .checked_sub(1)
-                                .unwrap_or(0),
-                        ),
-                    }),
-                    Key::Char('\n') => Some(Component::ActiveDetails { queries, selected }),
-                    Key::Esc | Key::Char('d') => None,
-                    _ => Some(Component::Active { queries, selected }),
-                },
-                Event::Tick => Some(Component::Active { queries, selected }),
-            },
-            Some(Component::ActiveDetails { queries, selected }) => match events.next()? {
-                Event::Input(key) => match key {
-                    Key::Ctrl('c') => {
-                        break;
-                    }
-                    Key::Esc | Key::Char('d') => Some(Component::Active { queries, selected }),
-                    _ => Some(Component::ActiveDetails { queries, selected }),
-                },
-                _ => Some(Component::ActiveDetails { queries, selected }),
-            },
-            Some(Component::Logs) => match events.next()? {
-                Event::Input(key) => match key {
-                    Key::Ctrl('c') => {
-                        break;
-                    }
-                    Key::Esc | Key::Char('d') => None,
-                    _ => Some(Component::Logs),
-                },
-                _ => Some(Component::Logs),
-            },
-        }
+            Event::Tick => app.borrow().window,
+        };
     }
     terminal.show_cursor()?;
     Ok(())

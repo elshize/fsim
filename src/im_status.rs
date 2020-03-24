@@ -56,6 +56,11 @@ impl Status {
         self.active_queries.iter()
     }
 
+    /// Iterates over finished queries.
+    pub fn finished(&self) -> impl Iterator<Item = &(Query, QueryStatus)> {
+        self.past_queries.iter()
+    }
+
     /// Get active query identified by `query`.
     pub fn active_query(&self, query: &Query) -> &QueryStatus {
         self.active_queries

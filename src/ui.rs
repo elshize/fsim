@@ -1,125 +1,249 @@
 #![cfg_attr(tarpaulin, skip)]
 
-use crate::app::Component;
-use fsim::{Query, QueryStatus};
+use crate::app::{App, Mode, QueriesView, View, Window};
+use fsim::{Query, QueryStatus, Status};
 use tui::{
     backend::Backend,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    widgets::{Block, Borders, Paragraph, Row, SelectableList, Table, Text, Widget},
+    widgets::{Block, Borders, Paragraph, Row, SelectableList, Table, Text},
     Frame,
 };
 
-fn draw_active<B: Backend>(frame: &mut Frame<B>, app: &crate::app::App, rect: Rect) {
-    match &app.focus {
-        Some(Component::ActiveDetails { queries, selected }) => {
-            let (query, status) = &queries[*selected];
-            let text = [Text::raw(format!("First line: {:#?}\n", status))];
-            let title = format!("Active: {:?}", query);
-            let mut paragraph = Paragraph::new(text.iter())
-                .block(Block::default().title(&title).borders(Borders::ALL));
-            frame.render(&mut paragraph, rect);
-        }
-        focus => {
-            let mut render_list = |queries: &[(Query, QueryStatus)], selected: Option<usize>| {
-                let items: Vec<_> = queries
-                    .into_iter()
-                    .map(|(q, s)| format!("{}: QID({}) {:?}", q.request, q.id, s))
-                    .collect();
-                let mut list = SelectableList::default()
-                    .block(Block::default().title("Active").borders(Borders::ALL))
-                    .items(&items)
-                    .select(selected)
-                    .highlight_style(Style::default().modifier(Modifier::BOLD).fg(Color::Red))
-                    .highlight_symbol(">>");
-                frame.render(&mut list, rect);
-            };
-            match &focus {
-                Some(Component::Active { queries, selected }) => {
-                    render_list(queries, Some(*selected));
-                }
-                _ => {
-                    let mut queries: Vec<_> = app.sim.status().active().cloned().collect();
-                    queries.sort_by_key(|&(Query { id: _, request }, _)| request);
-                    render_list(&queries, None);
-                }
-            };
-        }
-    }
+fn format_query((query, status): &(Query, QueryStatus)) -> String {
+    format!("{}: QID({}) {:?}", query.request, query.id, status)
 }
 
-fn draw_summary<B: Backend>(frame: &mut Frame<B>, app: &crate::app::App, rect: Rect) {
-    let table = vec![
-        vec![String::from("Step"), format!("{}", app.sim.step())],
-        vec![
-            String::from("Time"),
-            format!("{:?}", app.sim.status().time()),
-        ],
-        vec![
-            String::from("Entered"),
-            format!("{:?}", app.sim.status().queries_entered()),
-        ],
-        vec![
-            String::from("Finished"),
-            format!("{:?}", app.sim.status().queries_finished()),
-        ],
-        vec![
-            String::from("Incomplete"),
-            format!("{:?}", app.sim.status().queries_incomplete()),
-        ],
-        vec![
-            String::from("Active"),
-            format!("{:?}", app.sim.status().queries_active()),
-        ],
-    ];
-    let mut table = Table::new(
-        ["Status"].iter(),
-        table.into_iter().map(|v| Row::Data(v.into_iter())),
-    )
-    .header_style(Style::default().fg(Color::Yellow).modifier(Modifier::BOLD))
-    .block(Block::default().borders(Borders::ALL))
-    .widths(&[Constraint::Percentage(30), Constraint::Percentage(70)]);
-    frame.render(&mut table, rect);
-}
-
-fn draw_logs<B: Backend>(frame: &mut Frame<B>, app: &crate::app::App, rect: Rect) {
-    let items: Vec<_> = app.sim.status().logs().collect();
+fn render_query_list<'a, B: Backend>(
+    frame: &mut Frame<B>,
+    rect: Rect,
+    block: Block,
+    queries: &'a [(Query, QueryStatus)],
+    selected: Option<usize>,
+) {
+    let items: Vec<_> = queries.iter().map(format_query).collect();
     let mut list = SelectableList::default()
-        .block(Block::default().title("Logs").borders(Borders::ALL))
+        .block(block)
+        .items(&items)
+        .select(selected)
+        .highlight_style(Style::default().modifier(Modifier::BOLD).fg(Color::Red))
+        .highlight_symbol(">");
+    frame.render(&mut list, rect);
+}
+
+fn render_query_details<'a, B: Backend>(
+    frame: &mut Frame<B>,
+    rect: Rect,
+    block: Block,
+    queries: &'a [(Query, QueryStatus)],
+    selected: usize,
+) {
+    let (query, status) = &queries[selected];
+    let text = [
+        Text::raw(format!("{:#?}\n", query)),
+        Text::raw(format!("{:#?}\n", status)),
+    ];
+    let mut paragraph = Paragraph::new(text.iter()).block(block);
+    frame.render(&mut paragraph, rect);
+}
+
+fn render_logs<'a, B: Backend>(
+    frame: &mut Frame<B>,
+    rect: Rect,
+    block: Block,
+    logs: impl Iterator<Item = &'a String>,
+) {
+    let items: Vec<_> = logs.collect();
+    let mut list = SelectableList::default()
+        .block(block)
         .select(items.iter().enumerate().map(|(idx, _)| idx).last())
         .items(&items);
     frame.render(&mut list, rect);
 }
 
-pub(super) fn draw<B: Backend>(frame: &mut Frame<B>, app: &crate::app::App) {
-    let size = frame.size();
-    match app.focus {
-        Some(Component::Logs) => {
-            draw_logs(frame, app, size);
+fn render_stats<'a, B: Backend>(
+    frame: &mut Frame<B>,
+    rect: Rect,
+    block: Block,
+    step: usize,
+    status: &Status,
+) {
+    let table = vec![
+        vec![String::from("Step"), format!("{}", step)],
+        vec![String::from("Time"), format!("{:?}", status.time())],
+        vec![
+            String::from("Entered"),
+            format!("{:?}", status.queries_entered()),
+        ],
+        vec![
+            String::from("Finished"),
+            format!("{:?}", status.queries_finished()),
+        ],
+        vec![
+            String::from("Incomplete"),
+            format!("{:?}", status.queries_incomplete()),
+        ],
+        vec![
+            String::from("Active"),
+            format!("{:?}", status.queries_active()),
+        ],
+    ];
+    let mut table = Table::new(
+        [""].iter(),
+        table.into_iter().map(|v| Row::Data(v.into_iter())),
+    )
+    .header_style(Style::default().fg(Color::Yellow).modifier(Modifier::BOLD))
+    .block(block)
+    .widths(&[Constraint::Percentage(30), Constraint::Percentage(70)]);
+    frame.render(&mut table, rect);
+}
+
+fn block<'a>(title: &'a str, mode: Option<Mode>) -> Block<'a> {
+    let block = Block::default().title(title).borders(Borders::ALL);
+    match mode {
+        Some(Mode::ActivePane) => block
+            .title_style(Style::default().fg(Color::Red).modifier(Modifier::BOLD))
+            .border_style(Style::default().fg(Color::Red)),
+        Some(Mode::Navigation) => block
+            .title_style(Style::default().fg(Color::Yellow).modifier(Modifier::BOLD))
+            .border_style(Style::default().fg(Color::Yellow)),
+        None => block,
+    }
+}
+
+impl<'a> App<'a> {
+    fn draw_view<B: Backend>(
+        &self,
+        frame: &mut Frame<B>,
+        view: View,
+        rect: Rect,
+        mode: Option<Mode>,
+    ) {
+        match view {
+            View::ActiveQueries(view) => match view {
+                QueriesView::List(selected) => {
+                    render_query_list(
+                        frame,
+                        rect,
+                        block("Active", mode),
+                        &self.snapshot.active_queries,
+                        selected,
+                    );
+                }
+                QueriesView::Details(query_idx) => {
+                    render_query_details(
+                        frame,
+                        rect,
+                        block("Active", mode),
+                        &self.snapshot.active_queries,
+                        query_idx,
+                    );
+                }
+            },
+            View::FinishedQueries(view) => match view {
+                QueriesView::List(selected) => {
+                    render_query_list(
+                        frame,
+                        rect,
+                        block("Finished", mode),
+                        &self.snapshot.finished_queries,
+                        selected,
+                    );
+                }
+                QueriesView::Details(query_idx) => {
+                    render_query_details(
+                        frame,
+                        rect,
+                        block("Finished", mode),
+                        &self.snapshot.finished_queries,
+                        query_idx,
+                    );
+                }
+            },
+            View::Logs => {
+                render_logs(frame, rect, block("Logs", mode), self.snapshot.logs.iter());
+            }
+            View::Stats => {
+                render_stats(
+                    frame,
+                    rect,
+                    block("Status", mode),
+                    self.sim.step(),
+                    self.sim.status(),
+                );
+            }
         }
-        _ => {
-            let main_layout = Layout::default()
-                .direction(Direction::Horizontal)
-                .margin(0)
-                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
-                .split(size);
-            let left_layout = Layout::default()
-                .direction(Direction::Vertical)
-                .margin(0)
-                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
-                .split(main_layout[0]);
-            Block::default()
-                .title("Finished")
-                .borders(Borders::ALL)
-                .render(frame, left_layout[1]);
-            let right_layout = Layout::default()
-                .direction(Direction::Vertical)
-                .margin(0)
-                .constraints([Constraint::Length(10), Constraint::Percentage(50)].as_ref())
-                .split(main_layout[1]);
-            draw_active(frame, app, left_layout[0]);
-            draw_summary(frame, app, right_layout[0]);
-            draw_logs(frame, app, right_layout[1]);
+    }
+
+    /// Draw application window.
+    pub fn draw<B: Backend>(&mut self, frame: &mut Frame<B>) {
+        self.frames.clear();
+        match self.window {
+            Window::Maximized(view) => {
+                self.draw_view(frame, view, frame.size(), Some(Mode::ActivePane));
+                self.frames.set_frame(view, frame.size());
+            }
+            Window::Main(view, mode) => {
+                let main_layout = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .margin(0)
+                    .constraints([Constraint::Percentage(40), Constraint::Percentage(60)].as_ref())
+                    .split(frame.size());
+                let left_layout = Layout::default()
+                    .direction(Direction::Vertical)
+                    .margin(0)
+                    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
+                    .split(main_layout[0]);
+                let right_layout = Layout::default()
+                    .direction(Direction::Vertical)
+                    .margin(0)
+                    .constraints([Constraint::Length(10), Constraint::Percentage(50)].as_ref())
+                    .split(main_layout[1]);
+                self.frames.set_frame(View::Stats, right_layout[0]);
+                self.frames.set_frame(View::Logs, right_layout[1]);
+                self.frames
+                    .set_frame(View::ActiveQueries(QueriesView::default()), left_layout[0]);
+                self.frames.set_frame(
+                    View::FinishedQueries(QueriesView::default()),
+                    left_layout[1],
+                );
+                self.draw_view(
+                    frame,
+                    view.match_or(View::Stats),
+                    right_layout[0],
+                    match view {
+                        View::Stats => Some(mode),
+                        _ => None,
+                    },
+                );
+                self.draw_view(
+                    frame,
+                    view.match_or(View::Logs),
+                    right_layout[1],
+                    match view {
+                        View::Logs => Some(mode),
+                        _ => None,
+                    },
+                );
+                self.draw_view(
+                    frame,
+                    view.match_or(View::ActiveQueries(QueriesView::default())),
+                    left_layout[0],
+                    match view {
+                        View::ActiveQueries(_) => Some(mode),
+                        _ => None,
+                    },
+                );
+                self.draw_view(
+                    frame,
+                    view.match_or(View::FinishedQueries(QueriesView::default())),
+                    left_layout[1],
+                    match view {
+                        View::FinishedQueries(_) => Some(mode),
+                        _ => None,
+                    },
+                );
+            }
         }
     }
 }
