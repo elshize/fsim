@@ -41,9 +41,12 @@ struct Opt {
     config: Option<PathBuf>,
     /// Simulation configuration file.
     queries: Option<PathBuf>,
-    #[structopt(short, long)]
+    #[structopt(long, conflicts_with("debug"))]
     /// Print trace messages.
     trace: bool,
+    #[structopt(long, conflicts_with("trace"))]
+    /// Print debug messages.
+    debug: bool,
     #[structopt(long)]
     /// Print logs to a file.
     log_file: Option<PathBuf>,
@@ -110,8 +113,10 @@ fn run(opt: Opt) -> Result<()> {
     fsim::logger::LoggerBuilder::default()
         .level(if opt.trace {
             log::LevelFilter::Trace
-        } else {
+        } else if opt.debug {
             log::LevelFilter::Debug
+        } else {
+            log::LevelFilter::Info
         })
         .target("fsim")
         .init()?;
