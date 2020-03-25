@@ -114,7 +114,7 @@ There is a set of default bindings to navigate the application, which you can pr
 simulate --key-bindings
 ```
 
-In short, you can use arrows to move between panes, `Enter` to activate a pane or see query details, `Esc` to come back to the previous view, and the usual keys to navigate up and down any list.
+In short, you can use arrows to move between panes, `Enter` to activate a pane or see query details, `Esc` to come back to the previous view, and the usual keys to navigate up and down any list. You can also **maximize an active pane** with `F` key (`Shift+f`).
 
 ## No TUI Mode
 
