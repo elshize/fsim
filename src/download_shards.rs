@@ -80,8 +80,8 @@ struct Opt {
     #[structopt(short, long, possible_values = &["gov2", "cw09b"], conflicts_with = "url")]
     /// Use default URL for one of the known collections.
     collection: Collection,
+
     #[structopt(
-        short,
         long,
         conflicts_with = "url",
         default_value = "qkld-rand",
@@ -89,6 +89,7 @@ struct Opt {
     )]
     /// Type of clustering.
     clustering: Clustering,
+
     #[structopt(short, long)]
     /// Directory where to write the downloaded files.
     output_dir: PathBuf,
