@@ -12,9 +12,9 @@
 
 use indicatif::ProgressIterator;
 use itertools::Itertools;
-use rand::{seq::SliceRandom, SeedableRng};
+use rand::{seq::SliceRandom, Rng, SeedableRng};
 use rand_chacha::ChaChaRng;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use structopt::StructOpt;
@@ -67,22 +67,61 @@ fn assignment<'a>(ids: &'a [usize], num_shards: usize) -> impl Iterator<Item = u
         .map(|(_, s)| s)
 }
 
-fn run(opt: Opt) -> anyhow::Result<()> {
-    let document_count = count_lines(&opt.input)?;
-    let mut ids: Vec<_> = (0..document_count).collect();
-    let mut rng = opt
-        .seed
-        .map(|seed| ChaChaRng::seed_from_u64(seed))
-        .unwrap_or_else(|| ChaChaRng::from_entropy());
+fn prepare_output(dir: &Path) -> anyhow::Result<()> {
+    if dir.exists() {
+        if dir.is_dir() {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!(
+                "Cannot create {} -- it exists and is a file.",
+                dir.display()
+            ))
+        }
+    } else {
+        fs::create_dir_all(dir)?;
+        Ok(())
+    }
+}
+
+fn init_seed(opt: &Opt) -> anyhow::Result<u64> {
+    let seed = opt.seed.unwrap_or_else(|| rand::thread_rng().gen::<u64>());
+    fs::write(opt.output_dir.join("seed"), seed.to_string())?;
+    Ok(seed)
+}
+
+fn shuffled_ids(seed: u64, num_documents: usize) -> Vec<usize> {
+    let mut ids: Vec<_> = (0..num_documents).collect();
+    let mut rng = ChaChaRng::seed_from_u64(seed);
     ids.shuffle(&mut rng);
-    let input = BufReader::new(File::open(&opt.input)?);
-    let outputs: Result<Vec<_>, _> = (0..opt.shards)
-        .map(|idx| File::create(opt.output_dir.join(idx.to_string())))
+    ids
+}
+
+fn write_shards<R: BufRead, A: Iterator<Item = usize>>(
+    num_shards: usize,
+    input: R,
+    assignment: A,
+    output_dir: &Path,
+) -> anyhow::Result<()> {
+    let outputs: Result<Vec<_>, _> = (0..num_shards)
+        .map(|idx| File::create(output_dir.join(idx.to_string())))
         .collect();
     let mut outputs = outputs?;
-    for (document, shard) in input.lines().zip(assignment(&ids, opt.shards)).progress() {
+    for (document, shard) in input.lines().zip(assignment).progress() {
         write!(&mut outputs[shard], "{}", document?)?;
     }
+    Ok(())
+}
+
+fn run(opt: Opt) -> anyhow::Result<()> {
+    prepare_output(&opt.output_dir)?;
+    let ids = shuffled_ids(init_seed(&opt)?, count_lines(&opt.input)?);
+    let input = BufReader::new(File::open(&opt.input)?);
+    write_shards(
+        opt.shards,
+        input,
+        assignment(&ids, opt.shards),
+        &opt.output_dir,
+    )?;
     Ok(())
 }
 
