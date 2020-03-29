@@ -74,7 +74,8 @@ impl fmt::Display for Clustering {
 }
 
 /// Downloads shard partitioning from
-/// [`http://boston.lti.cs.cmu.edu/appendices/CIKM2016-Dai/`](http://boston.lti.cs.cmu.edu/appendices/CIKM2016-Dai/)
+/// http://boston.lti.cs.cmu.edu/appendices/CIKM2016-Dai/
+/// and renames the files to start from 0.
 #[derive(Debug, StructOpt)]
 struct Opt {
     #[structopt(short, long, possible_values = &["gov2", "cw09b"], conflicts_with = "url")]
@@ -109,10 +110,6 @@ impl Opt {
         }
     }
 }
-
-// fn download_text(url: Url) -> anyhow::Result<String> {
-//     Ok(reqwest::blocking::get(url)?.text()?)
-// }
 
 fn download_file<P: AsRef<Path>>(src: Url, dest: P) -> anyhow::Result<()> {
     std::fs::write(dest, reqwest::blocking::get(src)?.text()?)?;
