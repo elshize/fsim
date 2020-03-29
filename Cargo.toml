@@ -16,6 +16,10 @@ path = "src/main.rs"
 name = "download-shards"
 path = "src/download_shards.rs"
 
+[[bin]]
+name = "random-shards"
+path = "src/random_shards.rs"
+
 [dependencies]
 anyhow = "1.0"
 rand = "0.7"
@@ -36,6 +40,8 @@ strum = "0.18"
 strum_macros = "0.18"
 url = "2.1"
 reqwest = { version = "0.10.4", features = ["blocking"] }
+itertools = "0.9"
+indicatif = "0.14"
 
 [dev-dependencies]
 proptest = "0.9"

@@ -135,6 +135,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "clicolors-control"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90082ee5dcdd64dc4e9e0d37fbf3ee325419e39c0092191e0393df65518f741e"
+dependencies = [
+ "atty",
+ "lazy_static",
+ "libc",
+ "winapi 0.3.8",
+]
+
+[[package]]
 name = "cloudabi"
 version = "0.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -151,6 +163,22 @@ checksum = "f4ffc801dacf156c5854b9df4f425a626539c3a6ef7893cc0c5084a23f0b6c59"
 dependencies = [
  "atty",
  "lazy_static",
+ "winapi 0.3.8",
+]
+
+[[package]]
+name = "console"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6728a28023f207181b193262711102bfbaf47cc9d13bc71d0736607ef8efe88c"
+dependencies = [
+ "clicolors-control",
+ "encode_unicode",
+ "lazy_static",
+ "libc",
+ "regex",
+ "termios",
+ "unicode-width",
  "winapi 0.3.8",
 ]
 
@@ -228,6 +256,12 @@ name = "either"
 version = "1.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bb1f6b1ce1c140482ea30ddd3335fc0024ac7ee112895426e0a629a6c20adfe3"
+
+[[package]]
+name = "encode_unicode"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a357d28ed41a50f9c765dbfe56cbc04a64e53e5fc58ba79fbc34c10ef3df831f"
 
 [[package]]
 name = "encoding_rs"
@@ -317,6 +351,8 @@ dependencies = [
  "float-cmp",
  "id-derive",
  "im-rc",
+ "indicatif",
+ "itertools 0.9.0",
  "lazy_static",
  "log",
  "matches",
@@ -571,6 +607,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "indicatif"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49a68371cf417889c9d7f98235b7102ea7c54fc59bcbd22f3dea785be9d27e40"
+dependencies = [
+ "console",
+ "lazy_static",
+ "number_prefix",
+ "regex",
+]
+
+[[package]]
 name = "iovec"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -584,6 +632,15 @@ name = "itertools"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f56a2d0bc861f9165be4eb3442afd3c236d8a98afd426f65d92324ae1091a484"
+dependencies = [
+ "either",
+]
+
+[[package]]
+name = "itertools"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "284f18f85651fe11e8a991b2adb42cb078325c996ed026d994719efcfca1d54b"
 dependencies = [
  "either",
 ]
@@ -779,6 +836,12 @@ dependencies = [
  "hermit-abi",
  "libc",
 ]
+
+[[package]]
+name = "number_prefix"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17b02fc0ff9a9e4b35b3342880f48e896ebf69f2967921fe8646bf5b7125956a"
 
 [[package]]
 name = "numtoa"
@@ -1483,6 +1546,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "termios"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b620c5ea021d75a735c943269bb07d30c9b77d6ac6b236bc8b5c496ef05625"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "textwrap"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1579,7 +1651,7 @@ dependencies = [
  "bitflags",
  "cassowary",
  "either",
- "itertools",
+ "itertools 0.8.2",
  "log",
  "termion",
  "unicode-segmentation",
