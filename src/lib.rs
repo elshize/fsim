@@ -48,6 +48,8 @@ pub mod logger;
 mod simulation;
 pub use simulation::{Effect, QueryRoutingSimulation};
 
+pub mod optimization;
+
 /// Shard ID.
 #[derive(Id, Debug, PartialEq, PartialOrd, Eq, Ord, Serialize, Deserialize, Copy, Clone, Hash)]
 pub struct ShardId(usize);

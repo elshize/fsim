@@ -42,6 +42,9 @@ url = "2.1"
 reqwest = { version = "0.10.4", features = ["blocking"] }
 itertools = "0.9"
 indicatif = "0.14"
+nalgebra = "0.20"
+ordered-float = "1.0"
+lp-modeler = "0.4.2"
 
 [dev-dependencies]
 proptest = "0.9"
