@@ -2,12 +2,17 @@
 
 use anyhow::{anyhow, Result};
 use lp_modeler::dsl::{
-    lp_sum, BoundableLp, LpContinuous, LpObjective, LpOperations, LpProblem, Problem,
+    lp_sum,
+    BoundableLp,
+    LpContinuous,
+    LpObjective,
+    LpOperations,
+    LpProblem, //Problem,
 };
 use lp_modeler::solvers::{CbcSolver, SolverTrait};
 use nalgebra::{DMatrix, DVector};
-use ordered_float::OrderedFloat;
-use std::collections::BinaryHeap;
+//use ordered_float::OrderedFloat;
+//use std::collections::BinaryHeap;
 
 /// Represents techniques optimizing routing probabilities.
 pub trait Optimizer {
@@ -40,7 +45,7 @@ impl Optimizer for LpOptimizer {
                 let shard_vars: Vec<_> = weights
                     .iter()
                     .enumerate()
-                    .map(|(node, w)| {
+                    .map(|(node, _)| {
                         LpContinuous::new(&format!("d({}, {})", shard, node))
                             .lower_bound(0.0)
                             .upper_bound(1.0)
@@ -58,7 +63,7 @@ impl Optimizer for LpOptimizer {
             problem += lp_sum(&node_vars).le(&z);
         }
         let solver = CbcSolver::new();
-        let (_, result) = solver.run(&problem).unwrap();
+        let (_, _result) = solver.run(&problem).unwrap();
         todo!()
     }
 }

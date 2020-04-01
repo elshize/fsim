@@ -1,7 +1,7 @@
 #![cfg_attr(tarpaulin, skip)]
 
-use crate::app::{App, Mode, QueriesView, View, Window};
-use fsim::{Query, QueryStatus, Status};
+use crate::simulation::{Query, QueryStatus, Status};
+use crate::tui::app::{App, Mode, QueriesView, View, Window};
 use tui::{
     backend::Backend,
     layout::{Constraint, Direction, Layout, Rect},

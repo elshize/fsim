@@ -1,4 +1,4 @@
-use crate::{process::Runnable, query::Query, Effect, Event, Process, QueryId, RequestId};
+use super::{process::Runnable, query::Query, Effect, Event, Process, QueryId, RequestId};
 use log::trace;
 use rand::distributions::Distribution;
 use rand::RngCore;

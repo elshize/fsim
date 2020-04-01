@@ -1,11 +1,34 @@
-use crate::{QueryId, RequestId};
+use super::{QueryId, RequestId};
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
 /// Identifies a query passed along within a simulation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// A query is uniquely identified by [`request`](#structfield.request), which should be unique
+/// throughout any simulation. In order to ensure correctness, partial order is not defined for any
+/// two queries with a different query ID but the same request ID:
+///
+/// ```
+/// # use fsim::simulation::{Query, QueryId, RequestId};
+/// let lhs = Query::new(QueryId::from(0), RequestId::from(0));
+/// let rhs = Query::new(QueryId::from(1), RequestId::from(0));
+/// assert!(lhs.partial_cmp(&rhs).is_none());
+/// ```
+///
+/// # Panics
+///
+/// To enable indexing by query in associative collections, `Eq` and `Ord` are defined but will
+/// panic if the ordering or equality is not defined.
+///
+/// ```should_panic
+/// # use fsim::simulation::{Query, QueryId, RequestId};
+/// let lhs = Query::new(QueryId::from(0), RequestId::from(0));
+/// let rhs = Query::new(QueryId::from(1), RequestId::from(0));
+/// lhs.cmp(&rhs); // panics
+/// ```
+#[derive(Debug, Clone, Copy, Eq)]
 pub struct Query {
     /// Identifier of a certain query given at the input.
     /// This is used to retrieve information such as retrieval and selection times.
@@ -29,15 +52,33 @@ impl fmt::Display for Query {
     }
 }
 
+impl PartialEq for Query {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(&other) == Ordering::Equal
+    }
+}
+
 impl PartialOrd for Query {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.request.partial_cmp(&other.request)
+        match self.request.cmp(&other.request) {
+            Ordering::Equal => {
+                if self.id == other.id {
+                    Some(Ordering::Equal)
+                } else {
+                    None
+                }
+            }
+            ord => Some(ord),
+        }
     }
 }
 
 impl Ord for Query {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.request.cmp(&other.request)
+        match self.partial_cmp(&other) {
+            Some(cmp) => cmp,
+            None => panic!("Cannot compare {:?} with {:?}", self, other),
+        }
     }
 }
 
@@ -319,6 +360,9 @@ mod test {
             Query::new(QueryId(1), RequestId(1)).partial_cmp(&Query::new(QueryId(1), RequestId(0))),
             Some(Ordering::Greater)
         );
+        assert!(Query::new(QueryId(0), RequestId(0))
+            .partial_cmp(&Query::new(QueryId(1), RequestId(0)))
+            .is_none());
         assert_eq!(
             Query::new(QueryId(1), RequestId(1)).cmp(&Query::new(QueryId(1), RequestId(1))),
             Ordering::Equal
@@ -331,6 +375,12 @@ mod test {
             Query::new(QueryId(1), RequestId(1)).cmp(&Query::new(QueryId(1), RequestId(0))),
             Ordering::Greater
         );
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_compare_invalid() {
+        let _ = Query::new(QueryId(0), RequestId(0)) == Query::new(QueryId(1), RequestId(0));
     }
 
     #[test]

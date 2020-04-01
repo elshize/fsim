@@ -1,8 +1,8 @@
 //! Replica selector is an object that decides, given a list of shards,
 //! which replicas to route a query to.
 
-use crate::shard_selector::Shards;
-use crate::{NodeId, Query, ReplicaId};
+use super::shard_selector::Shards;
+use super::{NodeId, Query, ReplicaId};
 use rand::distributions::{uniform::SampleUniform, Distribution, Uniform};
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaChaRng;
@@ -110,8 +110,8 @@ impl<D: Distribution<usize> + RangeDistribution<usize>> ReplicaSelector
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::simulation::{QueryId, RequestId, ShardId};
     use crate::test::WrappingEchoDistribution;
-    use crate::{QueryId, RequestId, ShardId};
     use float_cmp::approx_eq;
     use proptest::prelude::*;
     use std::convert::TryFrom;

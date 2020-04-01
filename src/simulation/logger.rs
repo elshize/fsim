@@ -8,7 +8,7 @@
 //! In the example below, we first initialize the logger. Note that, in contrast of many logger
 //! implementations, calling [`init`](fn.init.html) will not fail—it will simply be a no-op.
 //! ```
-//! # use fsim::logger;
+//! # use fsim::simulation::logger;
 //! # use log;
 //! # fn main() -> anyhow::Result<()> {
 //! // Initialize logger.

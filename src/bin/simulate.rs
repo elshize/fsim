@@ -11,15 +11,12 @@
 #![allow(clippy::module_name_repetitions, clippy::default_trait_access)]
 
 use anyhow::{Context, Result};
-use event::{Event, Events};
-use fsim::{config::Config, QueryRoutingSimulation};
-use std::cell::RefCell;
+use fsim::simulation::{config::Config, QueryRoutingSimulation};
+use fsim::tui::{ActivePaneAction, App, GlobalAction, KeyBindings, NavigationAction};
 use std::fs::File;
 use std::io;
 use std::io::{stdin, BufRead, BufReader};
 use std::path::PathBuf;
-use std::rc::Rc;
-use std::time::Duration;
 use structopt::StructOpt;
 use strum::IntoEnumIterator;
 use termion::event::Key;
@@ -27,35 +24,38 @@ use termion::raw::IntoRawMode;
 use tui::backend::TermionBackend;
 use tui::Terminal;
 
-mod app;
-use app::{App, Mode, View, Window};
-mod event;
-mod keys;
-mod ui;
-use keys::{ActivePaneAction, GlobalAction, KeyBindings, KeyHandler, NavigationAction};
-
 #[derive(Debug, StructOpt)]
 struct Opt {
     /// Simulation configuration file.
     #[structopt(short, long, required_unless("key-bindings"))]
     config: Option<PathBuf>,
+
     /// Simulation configuration file.
     queries: Option<PathBuf>,
-    #[structopt(long, conflicts_with("debug"))]
+
     /// Print trace messages.
+    #[structopt(long, conflicts_with("debug"))]
     trace: bool,
-    #[structopt(long, conflicts_with("trace"))]
+
     /// Print debug messages.
+    #[structopt(long, conflicts_with("trace"))]
     debug: bool,
-    #[structopt(long)]
+
     /// Print logs to a file.
-    log_file: Option<PathBuf>,
     #[structopt(long)]
+    log_file: Option<PathBuf>,
+
     /// Print key bindings.
+    #[structopt(long)]
     key_bindings: bool,
-    #[structopt(long, default_value = "1000")]
+
     /// Print out up to this many log entries at a time.
+    #[structopt(long, default_value = "1000")]
     log_history_size: usize,
+
+    /// Only run simulation for a given time and reports the data.
+    #[structopt(long)]
+    no_ui: bool,
 }
 
 struct Input<'a>(Box<dyn BufRead + 'a>);
@@ -82,8 +82,6 @@ fn format_key(key: Key) -> String {
 }
 
 fn run(opt: Opt) -> Result<()> {
-    use Mode::*;
-
     if opt.key_bindings {
         let keys = KeyBindings::default();
         println!("--- Global ---");
@@ -110,7 +108,7 @@ fn run(opt: Opt) -> Result<()> {
         return Ok(());
     }
 
-    fsim::logger::LoggerBuilder::default()
+    fsim::simulation::logger::LoggerBuilder::default()
         .level(if opt.trace {
             log::LevelFilter::Trace
         } else if opt.debug {
@@ -121,19 +119,13 @@ fn run(opt: Opt) -> Result<()> {
         .target("fsim")
         .init()?;
     let config = Config::from_yaml(File::open(opt.config.unwrap())?)?;
-    let queries: Result<Vec<fsim::config::Query>> =
+    let queries: Result<Vec<fsim::simulation::config::Query>> =
         serde_json::Deserializer::from_reader(Input::new(opt.queries)?.reader())
             .into_iter()
             .map(|elem| elem.context("Failed to parse query"))
             .collect();
-    let app = Rc::new(RefCell::new(
-        App::new(QueryRoutingSimulation::from_config(config, queries?))
-            .with_log_history_size(opt.log_history_size),
-    ));
-    let events = Events::with_config(event::Config {
-        tick_rate: Duration::from_millis(200),
-        exit_key: Key::Null,
-    });
+    let app = App::new(QueryRoutingSimulation::new(config, queries?))
+        .with_log_history_size(opt.log_history_size);
 
     use std::io::Write;
     write!(io::stdout().into_raw_mode()?, "{}", termion::clear::All).unwrap();
@@ -142,42 +134,7 @@ fn run(opt: Opt) -> Result<()> {
     let backend = TermionBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     terminal.hide_cursor()?;
-
-    let key_handler = KeyHandler::new(Rc::clone(&app));
-
-    loop {
-        terminal.draw(|mut f| app.borrow_mut().draw(&mut f))?;
-
-        app.borrow_mut().window = match events.next()? {
-            Event::Input(key) => match key_handler.global_action(key) {
-                Ok(GlobalAction::Exit) => {
-                    break;
-                }
-                Ok(GlobalAction::NextStep) => {
-                    app.borrow_mut().next_step();
-                    app.borrow().window
-                }
-                Ok(GlobalAction::PrevStep) => {
-                    app.borrow_mut().prev_step();
-                    app.borrow().window
-                }
-                Ok(GlobalAction::NextSecond) => {
-                    app.borrow_mut().next_second();
-                    app.borrow().window
-                }
-                Ok(GlobalAction::PrevSecond) => {
-                    app.borrow_mut().prev_second();
-                    app.borrow().window
-                }
-                Err(key) => match app.borrow().window {
-                    Window::Main(view, Navigation) => key_handler.handle_navigation(view, key),
-                    Window::Main(view, ActivePane) => key_handler.handle_active_pane(view, key),
-                    Window::Maximized(view) => key_handler.handle_maximized(view, key),
-                },
-            },
-            Event::Tick => app.borrow().window,
-        };
-    }
+    app.event_loop(KeyBindings::default(), &mut terminal)?;
     terminal.show_cursor()?;
     Ok(())
 }

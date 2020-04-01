@@ -2,7 +2,7 @@
 //! which shards to route it to. Note that this **does not** select specific replicas but only
 //! shards, so an exhaustive policy will always return all possible shard IDs.
 
-use crate::{Query, ShardId};
+use super::{Query, ShardId};
 use std::time::Duration;
 
 /// Shard selection result.
@@ -66,7 +66,7 @@ impl ShardSelector for ExhaustiveSelector {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{QueryId, RequestId};
+    use crate::simulation::{QueryId, RequestId};
     use proptest::prelude::*;
 
     proptest! {

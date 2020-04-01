@@ -1,4 +1,4 @@
-use crate::{Query, QueryStatus};
+use crate::simulation::{Query, QueryStatus};
 use im_rc::{HashMap, Vector};
 use std::time::Duration;
 
@@ -184,7 +184,7 @@ impl Status {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{QueryId, RequestId};
+    use crate::simulation::{QueryId, RequestId};
     use im_rc::hashmap;
 
     #[test]

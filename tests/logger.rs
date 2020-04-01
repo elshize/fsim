@@ -1,4 +1,4 @@
-use fsim::logger;
+use fsim::simulation::logger;
 
 #[test]
 fn test_logger() -> anyhow::Result<()> {

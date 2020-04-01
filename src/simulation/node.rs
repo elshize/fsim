@@ -1,7 +1,8 @@
 //! Represents a node in the simulation.
 
-use crate::{
-    process::Runnable, query::Query, queue::ProcessCallback, Effect, NodeId, Process, ShardId,
+use super::{
+    config, process::Runnable, query::Query, queue::ProcessCallback, Effect, NodeId, Process,
+    ShardId,
 };
 use std::rc::Rc;
 use std::time::Duration;
@@ -20,7 +21,7 @@ pub struct Node<'a> {
     /// ID of the node.
     pub id: NodeId,
     /// Reference to query data, such as retrieval times, etc.
-    pub query_data: Rc<Vec<crate::config::Query>>,
+    pub query_data: Rc<Vec<config::Query>>,
     /// Function converting int values to durations.
     pub duration_from_u64: Box<dyn Fn(u64) -> Duration + 'a>,
 }

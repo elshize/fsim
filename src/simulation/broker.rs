@@ -1,8 +1,8 @@
 //! Represents a broker in the simulation.
 
-use crate::replica_selector::{ReplicaSelection, ReplicaSelector};
-use crate::shard_selector::{ShardSelection, ShardSelector};
-use crate::{
+use super::replica_selector::{ReplicaSelection, ReplicaSelector};
+use super::shard_selector::{ShardSelection, ShardSelector};
+use super::{
     process::Runnable, query::Query, queue::ProcessCallback, Effect, NodeRequest, Process,
     ReplicaId,
 };
@@ -81,9 +81,9 @@ impl<'a> Runnable for Broker<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::replica_selector::{RandomReplicaSelector, Replicas};
-    use crate::shard_selector::{ExhaustiveSelector, Shards};
-    use crate::{NodeId, NodeRequest, QueryId, RequestId, ShardId};
+    use crate::simulation::replica_selector::{RandomReplicaSelector, Replicas};
+    use crate::simulation::shard_selector::{ExhaustiveSelector, Shards};
+    use crate::simulation::{NodeId, NodeRequest, QueryId, RequestId, ShardId};
     use rand::distributions::Uniform;
     use std::time::Duration;
 

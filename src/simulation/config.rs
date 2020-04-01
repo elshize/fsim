@@ -1,6 +1,6 @@
 //! Anything related to loading up the simulation from configuration/input files.
 
-use crate::ShardId;
+use crate::simulation::ShardId;
 use anyhow::{bail, ensure, Context};
 use serde::{Deserialize, Serialize};
 use std::io::{Cursor, Read};
@@ -96,7 +96,7 @@ impl Config {
     /// # Example
     ///
     /// ```
-    /// # use fsim::config::{TimeUnit, Config};
+    /// # use fsim::simulation::config::{TimeUnit, Config};
     /// # fn main() -> anyhow::Result<()> {
     /// let input = r#"
     /// time_unit: micro

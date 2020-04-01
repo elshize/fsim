@@ -1,25 +1,170 @@
-use crate::config::{self, Config, TimeUnit};
-use crate::im_status::Status;
-use crate::logger;
-use crate::process::Runnable;
-use crate::query_generator::QueryGenerator;
-use crate::queue::{PopResult, ProcessCallback, PushResult, Queue};
-use crate::routing_matrix::RoutingMatrixBuilder;
-use crate::shard_selector::ExhaustiveSelector;
-use crate::{
-    Broker, BrokerStage, Event, Node, NodeId, NodeRequest, NodeStage, Process, Query,
-    QueryGeneratorStage, QueryId, ShardId,
-};
+//! Query routing simulation components.
+//!
+//! # Constructing Simulation
+//!
+//! A simulation is constructed from a [`Config`] structure and a vector of queries.
+//!
+//! The configuration can be constructed programmatically (see related documentation) but typically
+//! it is more convenient to load it from a YAML file.
+//!
+//! Similarly, [`config::Query`] can be constructed directly, or parsed from JSON.
+//! A vector of queries can be also directly loaded from a file.
+//!
+//! ```
+//! # use fsim::simulation::*;
+//! # use fsim::simulation::config::*;
+//! # fn main() -> anyhow::Result<()> {
+//! use anyhow::Context;
+//!
+//! let config = r#"
+//! time_unit: micro
+//! brokers: 2
+//! cpus_per_node: 2
+//! query_distribution:
+//!     mean: 10
+//!     std: 1
+//! assignment:
+//!     - [0, 1, 0]
+//!     - [1, 1, 0]
+//!     - [0, 1, 1]"#;
+//! let queries = r#"
+//! {"retrieval_times":[913,979,1022,994]}
+//! {"retrieval_times":[56,66,58,62]}
+//! {"retrieval_times":[2197,1893,1910,2031]}"#;
+//!
+//! let config = Config::from_yaml(std::io::Cursor::new(config))?;
+//! let queries: anyhow::Result<Vec<config::Query>> =
+//!     serde_json::Deserializer::from_reader(std::io::Cursor::new(queries))
+//!         .into_iter()
+//!         .map(|elem| elem.context("Failed to parse query"))
+//!         .collect();
+//! let simulation = QueryRoutingSimulation::new(config, queries?);
+//! # Ok(())
+//! # }
+//! ```
+//! [`Config`]: config/struct.Config.html
+//! [`config::Query`]: config/struct.Query.html
+
+use id_derive::Id;
 use rand::distributions::Uniform;
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaChaRng;
 use rand_distr::Normal;
+use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
+use std::cmp::{Ord, Ordering, PartialOrd};
 use std::collections::BinaryHeap;
 use std::rc::Rc;
 use std::time::Duration;
 
+mod query;
+pub use query::{Query, QueryStatus};
+
+mod process;
+pub use process::Runnable;
+
+mod query_generator;
+pub use query_generator::{QueryGenerator, QueryGeneratorStage};
+
+mod queue;
+pub use queue::{PopResult, ProcessCallback, PushResult, Queue};
+
+mod broker;
+pub use broker::{Broker, BrokerStage};
+
+mod node;
+pub use node::{Node, NodeStage};
+
+pub mod replica_selector;
+
+pub mod routing_matrix;
+use routing_matrix::RoutingMatrixBuilder;
+
+mod shard_selector;
+use shard_selector::ExhaustiveSelector;
+
+pub mod config;
+pub use config::{Config, TimeUnit};
+
+mod im_status;
+pub use im_status::Status;
+
+pub mod logger;
+
 const EPSILON: Duration = Duration::from_nanos(1);
+
+/// Shard ID.
+#[derive(Id, Debug, PartialEq, PartialOrd, Eq, Ord, Serialize, Deserialize, Copy, Clone, Hash)]
+pub struct ShardId(usize);
+
+/// Node ID.
+#[derive(Id, Debug, PartialEq, PartialOrd, Eq, Ord, Serialize, Deserialize, Copy, Clone, Hash)]
+pub struct NodeId(usize);
+
+/// Query ID.
+#[derive(Id, Debug, PartialEq, PartialOrd, Eq, Ord, Serialize, Deserialize, Copy, Clone, Hash)]
+pub struct QueryId(usize);
+
+/// Query request ID.
+#[derive(Id, Debug, PartialEq, PartialOrd, Eq, Ord, Serialize, Deserialize, Copy, Clone, Hash)]
+pub struct RequestId(usize);
+
+#[derive(Debug, PartialEq, PartialOrd, Eq, Ord, Serialize, Deserialize, Copy, Clone)]
+/// Replica is identified by a node and a shard.
+pub struct ReplicaId {
+    /// Node ID.
+    pub node: NodeId,
+    /// Shard ID.
+    pub shard: ShardId,
+}
+
+/// Represents a process being part of the simulation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Process {
+    /// See [`QueryGenerator`](struct.QueryGenerator.html).
+    QueryGenerator(QueryGeneratorStage),
+    /// See [`Broker`](struct.Broker.html).
+    Broker(BrokerStage),
+    /// See [`Node`](struct.Node.html).
+    Node {
+        /// Node ID.
+        id: NodeId,
+        /// Stage to enter.
+        stage: NodeStage,
+    },
+}
+
+/// An event is simply a process to run and a time to run it on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Event {
+    time: Duration,
+    process: Process,
+}
+
+impl Event {
+    fn new(time: Duration, process: Process) -> Self {
+        Event { time, process }
+    }
+}
+
+impl PartialOrd for Event {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.time.partial_cmp(&other.time)
+    }
+}
+
+impl Ord for Event {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.time.cmp(&other.time)
+    }
+}
+
+/// Request to route a query to a certain node to process a certain shard.
+#[derive(Debug, Eq, PartialEq, Copy, Clone)]
+pub struct NodeRequest {
+    id: NodeId,
+    shard: ShardId,
+}
 
 struct NodeEntry<'a> {
     node: Node<'a>,
@@ -142,7 +287,7 @@ fn duration_constructor(unit: TimeUnit) -> Box<dyn Fn(u64) -> Duration> {
 
 impl<'a> QueryRoutingSimulation<'a> {
     /// Constructs a new routing simulation from a config and input queries.
-    pub fn from_config(config: Config, queries: Vec<config::Query>) -> Self {
+    pub fn new(config: Config, queries: Vec<config::Query>) -> Self {
         let query_selection_dist = Uniform::from(0..queries.len());
         let mut seeder = config
             .seed
@@ -524,7 +669,7 @@ assignment:
     - [0, 1, 0]
     - [1, 1, 0]
     - [0, 1, 1]"#;
-        let sim = QueryRoutingSimulation::from_config(
+        let sim = QueryRoutingSimulation::new(
             Config::from_yaml(Cursor::new(config)).unwrap(),
             vec![config::Query {
                 selected_shards: None,

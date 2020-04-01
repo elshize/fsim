@@ -1,8 +1,8 @@
 //! Routing matrix defines probabilities of routing a query to a node N given a shard S.
 
-use crate::replica_selector::{ReplicaSelection, ReplicaSelector, Replicas};
-use crate::shard_selector::Shards;
-use crate::{NodeId, Query, ReplicaId};
+use super::replica_selector::{ReplicaSelection, ReplicaSelector, Replicas};
+use super::shard_selector::Shards;
+use super::{NodeId, Query, ReplicaId};
 use rand::distributions::{uniform::SampleBorrow, Distribution, WeightedIndex};
 use rand::SeedableRng;
 use std::cell::RefCell;
@@ -14,7 +14,7 @@ use std::time::Duration;
 /// # Examples
 ///
 /// ```
-/// # use fsim::routing_matrix::RoutingMatrixBuilder;
+/// # use fsim::simulation::routing_matrix::RoutingMatrixBuilder;
 /// # use rand_chacha::ChaChaRng;
 /// RoutingMatrixBuilder::<ChaChaRng>::new(vec![
 ///     vec![0.1, 0.4, 0.5], // Shard 0
@@ -106,7 +106,7 @@ impl<R: SeedableRng + rand::RngCore> ReplicaSelector for RoutingMatrix<R> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{QueryId, RequestId, ShardId};
+    use crate::simulation::{QueryId, RequestId, ShardId};
     use float_cmp::approx_eq;
     use rand_chacha::ChaChaRng;
     use std::convert::TryFrom;

@@ -8,6 +8,7 @@ use std::collections::VecDeque;
 pub struct ProcessCallback<'a, T, P>(Box<dyn Fn(T) -> P + 'a>);
 
 impl<'a, T, P> ProcessCallback<'a, T, P> {
+    /// Constructs a new process callback. Invoking `cb` will return an instance of `P`.
     pub fn new<F>(cb: F) -> Self
     where
         F: Fn(T) -> P + 'a,
@@ -15,6 +16,7 @@ impl<'a, T, P> ProcessCallback<'a, T, P> {
         Self(Box::new(cb))
     }
 
+    /// Executes the callback.
     pub fn process(self, val: T) -> P {
         self.0(val)
     }

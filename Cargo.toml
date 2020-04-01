@@ -10,15 +10,15 @@ path = "src/lib.rs"
 
 [[bin]]
 name = "simulate"
-path = "src/main.rs"
+path = "src/bin/simulate.rs"
 
 [[bin]]
 name = "download-shards"
-path = "src/download_shards.rs"
+path = "src/bin/download_shards.rs"
 
 [[bin]]
 name = "random-shards"
-path = "src/random_shards.rs"
+path = "src/bin/random_shards.rs"
 
 [dependencies]
 anyhow = "1.0"

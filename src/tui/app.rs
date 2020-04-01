@@ -1,18 +1,21 @@
-use fsim::{Query, QueryRoutingSimulation, QueryStatus};
+use crate::simulation::{Query, QueryRoutingSimulation, QueryStatus};
+use crate::tui::event::{init_event_receiver, Event};
+use crate::tui::keys::{ActivePaneAction, GlobalAction, KeyBindings, NavigationAction};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
+use termion::event::Key;
 use tui::layout::Rect;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mode {
+pub(crate) enum Mode {
     Navigation,
     ActivePane,
 }
 
 /// Current view of the application.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Window {
+pub(crate) enum Window {
     /// Main overall view with optional pane highlighted (navigation mode).
     Main(View, Mode),
     /// One of the views is active and maximized.
@@ -21,7 +24,7 @@ pub enum Window {
 
 /// List of queries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QueriesView {
+pub(crate) enum QueriesView {
     List(Option<usize>),
     Details(usize),
 }
@@ -34,7 +37,7 @@ impl Default for QueriesView {
 
 /// Type of view in the application.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum View {
+pub(crate) enum View {
     /// Active queries list.
     ActiveQueries(QueriesView),
     /// Finished queries list.
@@ -139,22 +142,18 @@ impl View {
     }
 
     /// Selects an item.
-    pub fn move_selection<'a>(
-        self,
-        direction: VerticalDirection,
-        app: Rc<RefCell<App<'a>>>,
-    ) -> View {
+    pub fn move_selection<'a>(self, direction: VerticalDirection, app: &App) -> View {
         if let Some(selected) = self.selected() {
-            if let Some(last) = self.list_length(&app.borrow().snapshot).checked_sub(1) {
+            if let Some(last) = self.list_length(&app.snapshot).checked_sub(1) {
                 match direction {
                     VerticalDirection::Up => self.select(selected.checked_sub(1).unwrap_or(0)),
                     VerticalDirection::Down => self.select(std::cmp::min(last, selected + 1)),
                     VerticalDirection::PageUp => {
-                        let shift = usize::from(self.frame_height(&app.borrow())) / 2;
+                        let shift = usize::from(self.frame_height(app)) / 2;
                         self.select(selected.checked_sub(shift).unwrap_or(0))
                     }
                     VerticalDirection::PageDown => {
-                        let shift = usize::from(self.frame_height(&app.borrow())) / 2;
+                        let shift = usize::from(self.frame_height(app)) / 2;
                         self.select(std::cmp::min(last, selected + shift))
                     }
                 }
@@ -256,14 +255,14 @@ impl Default for Frames {
 }
 
 impl Frames {
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.active = None;
         self.finished = None;
         self.status = None;
         self.logs = None;
     }
 
-    pub fn set_frame(&mut self, view: View, frame: Rect) {
+    pub(crate) fn set_frame(&mut self, view: View, frame: Rect) {
         use View::*;
         match view {
             ActiveQueries(_) => {
@@ -282,15 +281,17 @@ impl Frames {
     }
 }
 
+/// TUI application.
 pub struct App<'a> {
-    pub sim: QueryRoutingSimulation<'a>,
-    pub snapshot: Snapshot,
-    pub window: Window,
-    pub frames: Frames,
+    pub(crate) sim: QueryRoutingSimulation<'a>,
+    pub(crate) snapshot: Snapshot,
+    pub(crate) window: Window,
+    pub(crate) frames: Frames,
     log_history_size: usize,
 }
 
 impl<'a> App<'a> {
+    /// Constructs new application with the given simulation.
     pub fn new(sim: QueryRoutingSimulation<'a>) -> Self {
         Self {
             sim,
@@ -301,6 +302,9 @@ impl<'a> App<'a> {
         }
     }
 
+    /// Sets the logging history size to display at any step.
+    /// The history will not be lost, and it will be still able to go back, but only `n` lines
+    /// will be displayed at a time in the log pane.
     pub fn with_log_history_size(self, n: usize) -> Self {
         Self {
             log_history_size: n,
@@ -308,7 +312,7 @@ impl<'a> App<'a> {
         }
     }
 
-    pub fn frame_height(&self, view: View) -> u16 {
+    fn frame_height(&self, view: View) -> u16 {
         use View::*;
         match view {
             ActiveQueries(_) => self.frames.active.as_ref(),
@@ -346,18 +350,18 @@ impl<'a> App<'a> {
         };
     }
 
-    pub fn next_step(&mut self) {
+    fn next_step(&mut self) {
         self.sim.step_forward();
         self.update_snapshot();
     }
 
-    pub fn prev_step(&mut self) {
+    fn prev_step(&mut self) {
         if let Ok(_) = self.sim.step_back() {
             self.update_snapshot();
         }
     }
 
-    pub fn next_second(&mut self) {
+    fn next_second(&mut self) {
         let now = self.sim.status().time();
         while self.sim.status().time() - now < Duration::from_secs(1) {
             self.sim.step_forward();
@@ -365,9 +369,166 @@ impl<'a> App<'a> {
         self.update_snapshot();
     }
 
-    pub fn prev_second(&mut self) {
+    fn prev_second(&mut self) {
         if let Ok(_) = self.sim.step_back() {
             self.update_snapshot();
+        }
+    }
+
+    /// Handle keys in navigation mode (selecting pane).
+    fn handle_navigation(&self, bindings: &KeyBindings, view: View, key: Key) -> Window {
+        use NavigationAction::*;
+        match bindings.navigation_action(key) {
+            Ok(Left) => Window::Main(view.left(), Mode::Navigation),
+            Ok(Up) => Window::Main(view.up(), Mode::Navigation),
+            Ok(Right) => Window::Main(view.right(), Mode::Navigation),
+            Ok(Down) => Window::Main(view.down(), Mode::Navigation),
+            Ok(Enter) => Window::Main(view.activate(&self.snapshot), Mode::ActivePane),
+            Err(_) => Window::Main(view, Mode::Navigation),
+        }
+    }
+
+    /// Handle keys in active pane mode.
+    fn handle_active_pane(&self, bindings: &KeyBindings, view: View, key: Key) -> Window {
+        use ActivePaneAction::*;
+        match bindings.active_pane_action(key) {
+            Ok(Back) => Window::Main(
+                view.back(),
+                if view.is_list() {
+                    Mode::Navigation
+                } else {
+                    Mode::ActivePane
+                },
+            ),
+            Ok(Maximize) => Window::Maximized(view),
+            Ok(ItemDown) => Window::Main(
+                view.move_selection(VerticalDirection::Down, &self),
+                Mode::ActivePane,
+            ),
+            Ok(ItemUp) => Window::Main(
+                view.move_selection(VerticalDirection::Up, &self),
+                Mode::ActivePane,
+            ),
+            Ok(PageDown) => Window::Main(
+                view.move_selection(VerticalDirection::PageDown, &self),
+                Mode::ActivePane,
+            ),
+            Ok(PageUp) => Window::Main(
+                view.move_selection(VerticalDirection::PageUp, &self),
+                Mode::ActivePane,
+            ),
+            Ok(Home) => {
+                let len = view.list_length(&self.snapshot);
+                if len == 0 {
+                    Window::Main(view, Mode::ActivePane)
+                } else {
+                    Window::Main(view.select(0), Mode::ActivePane)
+                }
+            }
+            Ok(End) => {
+                let len = view.list_length(&self.snapshot);
+                if len == 0 {
+                    Window::Main(view, Mode::ActivePane)
+                } else {
+                    Window::Main(view.select(len - 1), Mode::ActivePane)
+                }
+            }
+            Ok(Details) => Window::Main(view.details(), Mode::ActivePane),
+            Err(_) => Window::Main(view, Mode::ActivePane),
+        }
+    }
+
+    /// Handle keys in active pane mode.
+    pub(super) fn handle_maximized(&self, bindings: &KeyBindings, view: View, key: Key) -> Window {
+        use ActivePaneAction::*;
+        match bindings.active_pane_action(key) {
+            Ok(Back) => {
+                if view.is_list() {
+                    Window::Main(view, Mode::Navigation)
+                } else {
+                    Window::Maximized(view.back())
+                }
+            }
+            Ok(Maximize) => Window::Main(view, Mode::ActivePane),
+            Ok(ItemDown) => Window::Maximized(view.move_selection(VerticalDirection::Down, &self)),
+            Ok(ItemUp) => Window::Maximized(view.move_selection(VerticalDirection::Up, &self)),
+            Ok(PageDown) => {
+                Window::Maximized(view.move_selection(VerticalDirection::PageDown, &self))
+            }
+            Ok(PageUp) => Window::Maximized(view.move_selection(VerticalDirection::PageUp, &self)),
+            Ok(Home) => {
+                let len = view.list_length(&self.snapshot);
+                if len == 0 {
+                    Window::Maximized(view)
+                } else {
+                    Window::Maximized(view.select(0))
+                }
+            }
+            Ok(End) => {
+                let len = view.list_length(&self.snapshot);
+                if len == 0 {
+                    Window::Maximized(view)
+                } else {
+                    Window::Maximized(view.select(len - 1))
+                }
+            }
+            Ok(Details) => Window::Maximized(view.details()),
+            Err(_) => Window::Maximized(view),
+        }
+    }
+
+    /// Run application event loop.
+    pub fn event_loop<B: ::tui::backend::Backend>(
+        self,
+        keys: KeyBindings,
+        terminal: &mut ::tui::Terminal<B>,
+    ) -> anyhow::Result<()> {
+        let app = Rc::new(RefCell::new(self));
+        use Mode::*;
+        let events = init_event_receiver(
+            Duration::from_millis(200),
+            keys.global_bindings(GlobalAction::Exit).collect(),
+        );
+        loop {
+            terminal.draw(|mut f| app.borrow_mut().draw(&mut f))?;
+            app.borrow_mut().window = match events.recv()? {
+                Event::Input(key) => match keys.global_action(key) {
+                    Ok(GlobalAction::Exit) => {
+                        return Ok(());
+                    }
+                    Ok(GlobalAction::NextStep) => {
+                        app.borrow_mut().next_step();
+                        app.borrow().window
+                    }
+                    Ok(GlobalAction::PrevStep) => {
+                        app.borrow_mut().prev_step();
+                        app.borrow().window
+                    }
+                    Ok(GlobalAction::NextSecond) => {
+                        app.borrow_mut().next_second();
+                        app.borrow().window
+                    }
+                    Ok(GlobalAction::PrevSecond) => {
+                        app.borrow_mut().prev_second();
+                        app.borrow().window
+                    }
+                    Err(key) => {
+                        let window = app.borrow().window;
+                        match window {
+                            Window::Main(view, Navigation) => {
+                                app.borrow_mut().handle_navigation(&keys, view, key)
+                            }
+                            Window::Main(view, ActivePane) => {
+                                app.borrow_mut().handle_active_pane(&keys, view, key)
+                            }
+                            Window::Maximized(view) => {
+                                app.borrow_mut().handle_maximized(&keys, view, key)
+                            }
+                        }
+                    }
+                },
+                Event::Tick => app.borrow().window,
+            };
         }
     }
 }
@@ -375,15 +536,15 @@ impl<'a> App<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use fsim::Config;
-    use fsim::QueryRoutingSimulation;
+    use crate::simulation::Config;
+    use crate::simulation::QueryRoutingSimulation;
     use proptest::prelude::*;
     use std::fs::File;
 
     proptest! {
         #[test]
         fn test_random_selector(sequence in prop::collection::vec(prop::bool::ANY, 100)) {
-            let sim = QueryRoutingSimulation::from_config(
+            let sim = QueryRoutingSimulation::new(
                 Config::from_yaml(File::open("tests/config.yml").unwrap()).unwrap(),
                 serde_json::Deserializer::from_reader(File::open("tests/queries.jl").unwrap())
                     .into_iter()
