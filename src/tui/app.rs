@@ -1,4 +1,6 @@
-use crate::simulation::{Query, QueryRoutingSimulation, QueryStatus};
+use crate::simulation::{
+    Progression, Query, QueryStatus, ReversibleProgression, Simulation, Status,
+};
 use crate::tui::event::{init_event_receiver, Event};
 use crate::tui::keys::{ActivePaneAction, GlobalAction, KeyBindings, NavigationAction};
 use std::cell::RefCell;
@@ -283,7 +285,7 @@ impl Frames {
 
 /// TUI application.
 pub struct App<'a> {
-    pub(crate) sim: QueryRoutingSimulation<'a>,
+    pub(crate) sim: Simulation<'a, ReversibleProgression>,
     pub(crate) snapshot: Snapshot,
     pub(crate) window: Window,
     pub(crate) frames: Frames,
@@ -292,7 +294,7 @@ pub struct App<'a> {
 
 impl<'a> App<'a> {
     /// Constructs new application with the given simulation.
-    pub fn new(sim: QueryRoutingSimulation<'a>) -> Self {
+    pub fn new(sim: Simulation<'a, ReversibleProgression>) -> Self {
         Self {
             sim,
             snapshot: Snapshot::default(),
@@ -351,7 +353,7 @@ impl<'a> App<'a> {
     }
 
     fn next_step(&mut self) {
-        self.sim.step_forward();
+        self.sim.advance();
         self.update_snapshot();
     }
 
@@ -364,7 +366,7 @@ impl<'a> App<'a> {
     fn next_second(&mut self) {
         let now = self.sim.status().time();
         while self.sim.status().time() - now < Duration::from_secs(1) {
-            self.sim.step_forward();
+            self.sim.advance();
         }
         self.update_snapshot();
     }
@@ -537,14 +539,13 @@ impl<'a> App<'a> {
 mod test {
     use super::*;
     use crate::simulation::Config;
-    use crate::simulation::QueryRoutingSimulation;
     use proptest::prelude::*;
     use std::fs::File;
 
     proptest! {
         #[test]
         fn test_random_selector(sequence in prop::collection::vec(prop::bool::ANY, 100)) {
-            let sim = QueryRoutingSimulation::new(
+            let sim = Simulation::new(
                 Config::from_yaml(File::open("tests/config.yml").unwrap()).unwrap(),
                 serde_json::Deserializer::from_reader(File::open("tests/queries.jl").unwrap())
                     .into_iter()
@@ -552,7 +553,7 @@ mod test {
                     .collect(),
             );
             let mut app = App::new(sim);
-            assert_eq!(app.sim.history().collect::<Vec<_>>().len(), 1);
+            assert_eq!(app.sim.step(), 1);
             let mut history_size = 1;
             for forward in sequence {
                 if forward {
@@ -562,7 +563,7 @@ mod test {
                     app.prev_step();
                     history_size = std::cmp::max(history_size - 1, 1);
                 }
-                assert_eq!(app.sim.history().collect::<Vec<_>>().len(), history_size);
+                assert_eq!(app.sim.step(), history_size);
             }
         }
     }

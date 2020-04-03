@@ -1,6 +1,6 @@
 #![cfg_attr(tarpaulin, skip)]
 
-use crate::simulation::{Query, QueryStatus, Status};
+use crate::simulation::{ImStatus, Query, QueryStatus, Simulation, Status};
 use crate::tui::app::{App, Mode, QueriesView, View, Window};
 use tui::{
     backend::Backend,
@@ -69,7 +69,7 @@ fn render_stats<'a, B: Backend>(
     rect: Rect,
     block: Block,
     step: usize,
-    status: &Status,
+    status: &ImStatus,
 ) {
     let table = vec![
         vec![String::from("Step"), format!("{}", step)],

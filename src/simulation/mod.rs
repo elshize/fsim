@@ -38,7 +38,7 @@
 //!         .into_iter()
 //!         .map(|elem| elem.context("Failed to parse query"))
 //!         .collect();
-//! let simulation = QueryRoutingSimulation::new(config, queries?);
+//! let simulation = Simulation::<ReversibleProgression>::new(config, queries?);
 //! # Ok(())
 //! # }
 //! ```
@@ -87,9 +87,66 @@ pub mod config;
 pub use config::{Config, TimeUnit};
 
 mod im_status;
-pub use im_status::Status;
+pub use im_status::Status as ImStatus;
 
 pub mod logger;
+
+mod history;
+pub use history::{History, PersistentHistory};
+
+mod progression;
+pub use progression::{Progression, ReversibleProgression};
+
+/// A snapshot of a simulation at a specific time.
+pub trait Status {
+    /// Current time.
+    fn time(&self) -> Duration;
+
+    /// Returns how many queries have entered the main incoming queue.
+    fn queries_entered(&self) -> usize;
+
+    /// Returns how many queries have finished processing.
+    fn queries_finished(&self) -> usize;
+
+    /// Active queries are these that have entered the system but have yet to finish, and have not
+    /// been dropped.
+    fn queries_active(&self) -> usize;
+
+    /// Number of queries that have been finished but some shard requests have been dropped.
+    fn queries_incomplete(&self) -> usize;
+
+    /// Iterates over active queries.
+    fn active<'a>(&'a self) -> Box<dyn Iterator<Item = &'a (Query, QueryStatus)> + 'a>;
+
+    /// Iterates over finished queries.
+    fn finished<'a>(&'a self) -> Box<dyn Iterator<Item = &'a (Query, QueryStatus)> + 'a>;
+
+    /// Get active query identified by `query`.
+    fn active_query(&self, query: &Query) -> &QueryStatus;
+
+    /// Logs a new query that entered into the system at `time`.
+    fn enter_query(&mut self, query: Query, time: Duration);
+
+    /// Changes the status of `query` to picked up at `time`.
+    fn pick_up_query(&mut self, query: Query, time: Duration);
+
+    /// Changes the status of `query` to dispatched to `num_shards` shards at `time`.
+    fn dispatch_query(&mut self, query: Query, time: Duration, num_shards: usize);
+
+    /// Records that one node has finished processing.
+    fn finish_shard(&mut self, query: Query, time: Duration);
+
+    /// Records a dropped shard request.
+    fn drop_shard(&mut self, query: Query, time: Duration);
+
+    /// Iterates over log events.
+    fn logs<'a>(&'a self) -> Box<dyn DoubleEndedIterator<Item = &'a String> + 'a>;
+
+    /// Add logged events.
+    fn log_events<E>(&mut self, events: E)
+    where
+        E: Iterator<Item = String>;
+}
 
 const EPSILON: Duration = Duration::from_nanos(1);
 
@@ -255,11 +312,54 @@ macro_rules! pop_query {
     };
 }
 
-/// This is the main structure and the entry point of the simulation experiment.
-/// It is supposed to be the only entity that holds state and modifies it.
-/// Other processes are pure functions that receive information and return an effect,
-/// such as "push query to a queue", or "wait for X ms", or "request CPU".
-pub struct QueryRoutingSimulation<'a> {
+fn duration_constructor(unit: TimeUnit) -> Box<dyn Fn(u64) -> Duration> {
+    Box::new(match unit {
+        TimeUnit::Micro => Duration::from_micros,
+        TimeUnit::Milli => Duration::from_millis,
+        TimeUnit::Nano => Duration::from_nanos,
+        TimeUnit::Second => Duration::from_secs,
+    })
+}
+
+//pub trait SimulationStatus {
+//    //
+//}
+//
+//pub trait Schedulable {
+//    /// Schedule a process to run at `time`.
+//    fn schedule(&mut self, time: Duration, process: Process);
+//}
+//
+//pub trait ForwardSimulation: Schedulable {
+//    type Status;
+//
+//    /// Advance one step forward.
+//    fn advance(&mut self);
+//
+//    /// Run a number of steps.
+//    fn run_steps(&mut self, steps: usize);
+//
+//    /// Run until certain time.
+//    fn run_until(&mut self, time: Duration);
+//
+//    /// Run until no events are found.
+//    fn run(&mut self);
+//
+//    /// Returns the current simulation step.
+//    fn step(&self) -> usize;
+//
+//    /// Returns the current simulation status.
+//    fn status(&self) -> &Self::Status;
+//}
+//
+//pub trait RewindableSimulation: ForwardSimulation {
+//    /// Goes back in history. If no past steps exist, it returns an error.
+//    fn step_back(&mut self) -> Result<(), ()>;
+//    /// Returns past history.
+//    fn history(&self) -> Vec<&Status>;
+//}
+
+pub struct Simulation<'a, P> {
     /// Queue of the future events that will be processed in order of time.
     scheduled_events: BinaryHeap<Reverse<Event>>,
 
@@ -272,20 +372,10 @@ pub struct QueryRoutingSimulation<'a> {
     broker: Broker<'a>,
     query_data: Rc<Vec<config::Query>>,
     time_unit: TimeUnit,
-    history: Vec<Status>,
-    next_steps: Vec<Status>,
+    progression: P,
 }
 
-fn duration_constructor(unit: TimeUnit) -> Box<dyn Fn(u64) -> Duration> {
-    Box::new(match unit {
-        TimeUnit::Micro => Duration::from_micros,
-        TimeUnit::Milli => Duration::from_millis,
-        TimeUnit::Nano => Duration::from_nanos,
-        TimeUnit::Second => Duration::from_secs,
-    })
-}
-
-impl<'a> QueryRoutingSimulation<'a> {
+impl<'a, P: Progression> Simulation<'a, P> {
     /// Constructs a new routing simulation from a config and input queries.
     pub fn new(config: Config, queries: Vec<config::Query>) -> Self {
         let query_selection_dist = Uniform::from(0..queries.len());
@@ -316,8 +406,7 @@ impl<'a> QueryRoutingSimulation<'a> {
             ),
             query_data: Rc::from(queries),
             time_unit: config.time_unit,
-            history: vec![Status::default()],
-            next_steps: Vec::new(),
+            progression: P::default(),
         };
         let nodes = sim.set_up_nodes(&config);
         let time = Duration::from_nanos(0);
@@ -355,46 +444,7 @@ impl<'a> QueryRoutingSimulation<'a> {
             .collect()
     }
 
-    /// Schedule a process to run at `time`.
-    pub fn schedule(&mut self, time: Duration, process: Process) {
-        self.scheduled_events
-            .push(Reverse(Event::new(time, process)));
-    }
-
-    /// Returns the current simulation step.
-    pub fn step(&self) -> usize {
-        self.history.len() - 1
-    }
-
-    /// Returns the current simulation status.
-    pub fn history(&self) -> impl Iterator<Item = &Status> {
-        self.history.iter().rev()
-    }
-
-    /// Returns the current simulation status.
-    pub fn status(&self) -> &Status {
-        self.history.iter().last().unwrap()
-    }
-
-    /// Goes back in history. If no past steps exist, it returns an error.
-    pub fn step_back(&mut self) -> Result<(), ()> {
-        if self.history.len() > 1 {
-            self.next_steps.push(self.history.pop().unwrap());
-            Ok(())
-        } else {
-            Err(())
-        }
-    }
-
-    /// Goes one step forward in history. Calls `advance` until history is modified.
-    pub fn step_forward(&mut self) {
-        let history_size = self.history.len();
-        while history_size == self.history.len() {
-            self.advance();
-        }
-    }
-
-    fn log_event(&self, time: Duration, process: &Process) {
+    pub(crate) fn log_event(&self, time: Duration, process: &Process) {
         match process {
             Process::QueryGenerator(stage) => match stage {
                 QueryGeneratorStage::Generate => {
@@ -444,54 +494,52 @@ impl<'a> QueryRoutingSimulation<'a> {
         };
     }
 
-    fn run_process(
+    pub(crate) fn run_process(
         &self,
         time: Duration,
         process: Process,
-        status: Status,
-    ) -> (Effect<'a>, Status) {
+        status: &mut P::Status,
+    ) -> Effect<'a> {
         match process {
-            Process::QueryGenerator(stage) => (self.query_generator.run(stage), status),
+            Process::QueryGenerator(stage) => self.query_generator.run(stage),
             Process::Broker(stage) => {
-                let status = if let &BrokerStage::Select(query) = &stage {
-                    status.pick_up_query(query, time)
-                } else {
-                    status
-                };
-                (self.broker.run(stage), status)
+                if let &BrokerStage::Select(query) = &stage {
+                    status.pick_up_query(query, time);
+                }
+                self.broker.run(stage)
             }
-            Process::Node { id, stage } => (
-                self.nodes
-                    .get(usize::from(id))
-                    .expect("Node ID out of bounds")
-                    .node
-                    .run(stage),
-                status,
-            ),
+            Process::Node { id, stage } => self
+                .nodes
+                .get(usize::from(id))
+                .expect("Node ID out of bounds")
+                .node
+                .run(stage),
         }
     }
 
-    fn handle_effect(&mut self, time: Duration, effect: Effect<'a>, status: Status) -> Status {
+    pub(crate) fn handle_effect(
+        &mut self,
+        time: Duration,
+        effect: Effect<'a>,
+        status: &mut P::Status,
+    ) {
         use Effect::*;
         match effect {
             Schedule(event) => {
                 self.schedule(time + event.time, event.process);
-                status
             }
             ScheduleMany(events) => {
                 for event in events {
                     self.schedule(time + event.time, event.process);
                 }
-                status
             }
             QueryQueuePut(query, process) => {
                 push_query!(self, time, self.incoming_queries, query, process);
                 log::debug!("[{:?}] [{}] Enters incoming queue", time, query);
-                status.enter_query(query, time)
+                status.enter_query(query, time);
             }
             QueryQueueGet(callback) => {
                 pop_query!(self, time, self.incoming_queries, callback);
-                status
             }
             Route {
                 timeout,
@@ -506,10 +554,9 @@ impl<'a> QueryRoutingSimulation<'a> {
                     time + timeout,
                     Process::Broker(BrokerStage::Dispatch { nodes, query }),
                 );
-                status
             }
             Dispatch { nodes, query } => {
-                let mut status = status.dispatch_query(query, time, nodes.len());
+                status.dispatch_query(query, time, nodes.len());
                 for node in nodes {
                     let queue = &mut self
                         .nodes
@@ -517,10 +564,9 @@ impl<'a> QueryRoutingSimulation<'a> {
                         .expect("Node ID out of bounds")
                         .entry_queue;
                     if !push_query!(self, time, queue, (query, node.shard)) {
-                        status = status.drop_shard(query, time);
+                        status.drop_shard(query, time);
                     }
                 }
-                status
             }
             NodeQueryGet { node, callback } => {
                 pop_query!(
@@ -532,7 +578,6 @@ impl<'a> QueryRoutingSimulation<'a> {
                         .entry_queue,
                     callback
                 );
-                status
             }
             Aggregate {
                 timeout,
@@ -546,63 +591,159 @@ impl<'a> QueryRoutingSimulation<'a> {
                         stage: NodeStage::GetQuery,
                     },
                 );
-                status.finish_shard(query, time)
+                status.finish_shard(query, time);
             }
         }
     }
 
-    /// Advance the simulation
+    pub(crate) fn next_event(&mut self) -> Option<Reverse<Event>> {
+        self.scheduled_events.pop()
+    }
+
+    fn assert_time(&self, time: &Duration, process: &Process) {
+        assert!(
+            &self.status().time() <= time,
+            "Current event scheduled at time {:?}, which is earlier than current time {:?}: {:?}",
+            time,
+            self.status().time(),
+            Event {
+                time: *time,
+                process: process.clone()
+            },
+        );
+    }
+
     pub fn advance(&mut self) {
-        if let Some(next) = self.next_steps.pop() {
-            self.history.push(next);
+        if self.progression.next().is_ok() {
             return;
         }
         if let Some(Reverse(Event { time, process })) = self.scheduled_events.pop() {
-            assert!(
-                self.status().time() <= time,
-                "Current event scheduled at time {:?}, which is earlier than current time {:?}: {:?}",
-                time,
-                self.status().time(),
-                Event { time, process },
-            );
-
+            self.assert_time(&time, &process);
             self.log_event(time, &process);
-            let (effect, status) = self.run_process(time, process, self.status().clone());
-            let status = self.handle_effect(time, effect, status);
-            self.history.push(
-                status.log_events(
-                    logger::clear()
-                        .expect("Unable to retrieve logs")
-                        .into_iter(),
-                ),
+            let status = self.progression.init_step();
+            let effect = self.run_process(time, process, &mut status.borrow_mut());
+            self.handle_effect(time, effect, &mut status.borrow_mut());
+            status.borrow_mut().log_events(
+                logger::clear()
+                    .expect("Unable to retrieve logs")
+                    .into_iter(),
             );
+            self.progression.record(status.into_inner());
         }
     }
 
-    /// Run until no events are found.
+    pub fn schedule(&mut self, time: Duration, process: Process) {
+        self.scheduled_events
+            .push(Reverse(Event::new(time, process)));
+    }
+
     pub fn run(&mut self) {
         while !self.scheduled_events.is_empty() {
-            self.step_forward();
+            self.advance();
         }
     }
 
-    /// Run until certain time.
     pub fn run_until(&mut self, time: Duration) {
         while !self.scheduled_events.is_empty() && self.status().time() < time {
-            self.step_forward();
+            self.advance();
         }
     }
 
-    /// Run until certain time.
     pub fn run_steps(&mut self, steps: usize) {
         for _ in 0..steps {
             if self.scheduled_events.is_empty() {
                 break;
             }
-            self.step_forward();
+            self.advance();
         }
     }
+
+    pub fn step(&self) -> usize {
+        self.progression.step()
+    }
+
+    pub fn status(&self) -> &P::Status {
+        self.progression.status()
+    }
 }
+
+impl<'a> Simulation<'a, ReversibleProgression> {
+    pub fn step_back(&mut self) -> Result<(), ()> {
+        self.progression.prev()
+    }
+}
+
+//impl<'a, H> Schedulable for Simulation<'a, H> {
+//    fn schedule(&mut self, time: Duration, process: Process) {
+//        self.scheduled_events
+//            .push(Reverse(Event::new(time, process)));
+//    }
+//}
+//
+//impl<'a> ForwardSimulation for Simulation<'a, PersistentHistory> {
+//    type Status = Status;
+//
+//    fn advance(&mut self) {
+//        if let Some(next) = self.history.next() {
+//            self.history.record(next);
+//            return;
+//        }
+//        if let Some(Reverse(Event { time, process })) = self.scheduled_events.pop() {
+//            assert!(
+//                self.status().time() <= time,
+//                "Current event scheduled at time {:?}, which is earlier than current time {:?}: {:?}",
+//                time,
+//                self.status().time(),
+//                Event { time, process },
+//            );
+//
+//            self.log_event(time, &process);
+//            let (effect, status) = self.run_process(time, process, self.status().clone());
+//            let status = self.handle_effect(time, effect, status);
+//            self.history.record(
+//                status.log_events(
+//                    logger::clear()
+//                        .expect("Unable to retrieve logs")
+//                        .into_iter(),
+//                ),
+//            );
+//        }
+//    }
+//    fn run(&mut self) {
+//        while !self.scheduled_events.is_empty() {
+//            self.advance();
+//        }
+//    }
+//    fn run_until(&mut self, time: Duration) {
+//        while !self.scheduled_events.is_empty() && self.status().time() < time {
+//            self.advance();
+//        }
+//    }
+//    fn run_steps(&mut self, steps: usize) {
+//        for _ in 0..steps {
+//            if self.scheduled_events.is_empty() {
+//                break;
+//            }
+//            self.advance();
+//        }
+//    }
+//    fn step(&self) -> usize {
+//        self.history.step()
+//    }
+//    fn status(&self) -> &Self::Status {
+//        self.history.status()
+//    }
+//}
+//
+//impl<'a> RewindableSimulation for Simulation<'a, PersistentHistory> {
+//    fn step_back(&mut self) -> Result<(), ()> {
+//        self.history.step_back()
+//    }
+//
+//    fn history(&self) -> Vec<&Status> {
+//        self.history.past()
+//    }
+//}
 
 #[cfg(test)]
 mod test {
@@ -669,7 +810,7 @@ assignment:
     - [0, 1, 0]
     - [1, 1, 0]
     - [0, 1, 1]"#;
-        let sim = QueryRoutingSimulation::new(
+        let sim = Simulation::<ReversibleProgression>::new(
             Config::from_yaml(Cursor::new(config)).unwrap(),
             vec![config::Query {
                 selected_shards: None,

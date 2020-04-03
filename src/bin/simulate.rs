@@ -11,7 +11,7 @@
 #![allow(clippy::module_name_repetitions, clippy::default_trait_access)]
 
 use anyhow::{Context, Result};
-use fsim::simulation::{config::Config, QueryRoutingSimulation};
+use fsim::simulation::{config::Config, Simulation};
 use fsim::tui::{ActivePaneAction, App, GlobalAction, KeyBindings, NavigationAction};
 use std::fs::File;
 use std::io;
@@ -124,8 +124,8 @@ fn run(opt: Opt) -> Result<()> {
             .into_iter()
             .map(|elem| elem.context("Failed to parse query"))
             .collect();
-    let app = App::new(QueryRoutingSimulation::new(config, queries?))
-        .with_log_history_size(opt.log_history_size);
+    let app =
+        App::new(Simulation::new(config, queries?)).with_log_history_size(opt.log_history_size);
 
     use std::io::Write;
     write!(io::stdout().into_raw_mode()?, "{}", termion::clear::All).unwrap();
