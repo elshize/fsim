@@ -1,4 +1,4 @@
-//! Produce random shard partitioning from a text file with document titles.
+//! Produce random or URL shard partitioning from a text file with document titles.
 
 #![warn(
     missing_docs,
@@ -10,6 +10,7 @@
 #![warn(clippy::all, clippy::pedantic)]
 #![allow(clippy::module_name_repetitions, clippy::default_trait_access)]
 
+use indicatif::ProgressBar;
 use indicatif::ProgressIterator;
 use itertools::Itertools;
 use rand::{seq::SliceRandom, Rng, SeedableRng};
@@ -19,7 +20,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use structopt::StructOpt;
 
-/// Produce random shard partitioning from a text file with document titles.
+/// Produce random or URL shard partitioning from a text file with document titles.
 #[derive(Debug, StructOpt)]
 struct Opt {
     #[structopt(short, long)]
@@ -34,9 +35,17 @@ struct Opt {
     /// Number of shards
     shards: usize,
 
-    #[structopt(long)]
+    #[structopt(long, conflicts_with = "url")]
     /// Random seed.
     seed: Option<u64>,
+
+    #[structopt(long, conflicts_with = "seed")]
+    /// Partition by URL.
+    url: Option<PathBuf>,
+
+    #[structopt(long)]
+    /// Do not print progress.
+    silent: bool,
 }
 
 fn count_lines(path: &Path) -> anyhow::Result<usize> {
@@ -101,26 +110,45 @@ fn write_shards<R: BufRead, A: Iterator<Item = usize>>(
     input: R,
     assignment: A,
     output_dir: &Path,
+    silent: bool,
 ) -> anyhow::Result<()> {
     let outputs: Result<Vec<_>, _> = (0..num_shards)
         .map(|idx| File::create(output_dir.join(idx.to_string())))
         .collect();
     let mut outputs = outputs?;
-    for (document, shard) in input.lines().zip(assignment).progress() {
-        write!(&mut outputs[shard], "{}", document?)?;
+    let len = assignment.size_hint().0 as u64;
+    let progress = if silent {
+        ProgressBar::hidden()
+    } else {
+        ProgressBar::new(len)
+    };
+    for (document, shard) in input.lines().zip(assignment).progress_with(progress) {
+        write!(&mut outputs[shard], "{}\n", document?)?;
     }
     Ok(())
 }
 
 fn run(opt: Opt) -> anyhow::Result<()> {
     prepare_output(&opt.output_dir)?;
-    let ids = shuffled_ids(init_seed(&opt)?, count_lines(&opt.input)?);
+    let permutation: Vec<_> = if let Some(url_path) = opt.url {
+        let indexed_lines: Result<Vec<(String, usize)>, _> = BufReader::new(File::open(&url_path)?)
+            .lines()
+            .enumerate()
+            .map(|(idx, line)| line.map(|l| (l, idx)))
+            .collect();
+        let mut indexed_lines = indexed_lines?;
+        indexed_lines.sort();
+        indexed_lines.into_iter().map(|(_, doc)| doc).collect()
+    } else {
+        shuffled_ids(init_seed(&opt)?, count_lines(&opt.input)?)
+    };
     let input = BufReader::new(File::open(&opt.input)?);
     write_shards(
         opt.shards,
         input,
-        assignment(&ids, opt.shards),
+        assignment(&permutation, opt.shards),
         &opt.output_dir,
+        opt.silent,
     )?;
     Ok(())
 }
@@ -128,5 +156,52 @@ fn run(opt: Opt) -> anyhow::Result<()> {
 fn main() {
     if let Err(err) = run(Opt::from_args()) {
         println!("{}", err);
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::{run, Opt};
+    use itertools::Itertools;
+    use proptest::prelude::*;
+    use rand::{seq::SliceRandom, SeedableRng};
+    use rand_chacha::ChaChaRng;
+    use std::collections::BTreeSet;
+    use std::fs::File;
+    use std::io::{BufRead, BufReader};
+    use tempdir::TempDir;
+
+    proptest! {
+        #[test]
+        fn test_by_url(seed: u64) {
+            let temp = TempDir::new("").unwrap();
+            let urls_path = temp.path().join("urls");
+            let docs_path = temp.path().join("docs");
+            let mut data: Vec<(String, String)> = (0..=9)
+                .map(|n| (format!("U{}", n), format!("D{}", n)))
+                .collect();
+            let mut rng = ChaChaRng::seed_from_u64(seed);
+            data.shuffle(&mut rng);
+            let (urls, docs): (Vec<String>, Vec<String>) = data.into_iter().unzip();
+            std::fs::write(&urls_path, urls.join("\n"))?;
+            std::fs::write(&docs_path, docs.join("\n"))?;
+
+            run(Opt {
+                input: docs_path,
+                output_dir: temp.path().into(),
+                shards: 3,
+                seed: None,
+                url: Some(urls_path),
+                silent: true,
+            }).unwrap();
+
+            for (shard, docs) in (0..=9).chunks(4).into_iter().enumerate() {
+                let shard_path = temp.path().join(shard.to_string());
+                let actual: Result<BTreeSet<_>, _> =
+                    BufReader::new(File::open(&shard_path)?).lines().collect();
+                let expected: BTreeSet<_> = docs.map(|d| format!("D{}", d)).collect();
+                assert_eq!(actual.unwrap(), expected);
+            }
+        }
     }
 }

@@ -17,8 +17,8 @@ name = "download-shards"
 path = "src/bin/download_shards.rs"
 
 [[bin]]
-name = "random-shards"
-path = "src/bin/random_shards.rs"
+name = "generate-shards"
+path = "src/bin/generate_shards.rs"
 
 [dependencies]
 anyhow = "1.0"
