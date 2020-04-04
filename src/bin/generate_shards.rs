@@ -132,7 +132,8 @@ fn run(opt: Opt) -> anyhow::Result<()> {
     prepare_output(&opt.output_dir)?;
     let permutation: Vec<_> = if let Some(url_path) = opt.url {
         let indexed_lines: Result<Vec<(String, usize)>, _> = BufReader::new(File::open(&url_path)?)
-            .lines()
+            .split(b'\n')
+            .map(|buf| buf.map(|b| String::from_utf8_lossy(&b).to_string()))
             .enumerate()
             .map(|(idx, line)| line.map(|l| (l, idx)))
             .collect();
