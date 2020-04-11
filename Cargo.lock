@@ -371,6 +371,7 @@ dependencies = [
  "float-cmp",
  "id-derive",
  "im-rc",
+ "indexed_vec",
  "indicatif",
  "itertools 0.9.0",
  "lazy_static",
@@ -627,6 +628,15 @@ dependencies = [
  "sized-chunks",
  "typenum",
  "version_check",
+]
+
+[[package]]
+name = "indexed_vec"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dd5390d1640d64a30efbbe9cd15cb9f472388b4d5693677c693a7bc9310c0d08"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

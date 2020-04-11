@@ -14,6 +14,8 @@ use nalgebra::{DMatrix, DVector};
 //use ordered_float::OrderedFloat;
 //use std::collections::BinaryHeap;
 
+pub mod replica;
+
 /// Represents techniques optimizing routing probabilities.
 pub trait Optimizer {
     /// Optimize routing policy.
