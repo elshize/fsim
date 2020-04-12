@@ -2,8 +2,12 @@
 
 use indexed_vec::{Idx, IndexVec};
 use itertools::Itertools;
+use ordered_float::OrderedFloat;
 use rand::{Rng, SeedableRng};
+use rand_distr::weighted::WeightedIndex;
+use rand_distr::Distribution;
 use std::cell::RefCell;
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
 /// Shard identifier.
@@ -85,8 +89,10 @@ impl<T: Sized> BalancedDistribution<T> {
     }
 }
 
+/// [`BalancedDistribution`] that ensures that one shard is assigned to distinct machines.
+///
+/// [`BalancedDistribution`]: trait.BalancedDistribution.html
 pub struct BalancedWithDistinctMachines<T: std::hash::Hash> {
-    //resources: Vec<T>,
     counts: HashMap<T, usize>,
 }
 
@@ -112,7 +118,6 @@ impl<T: std::hash::Hash + Eq + Copy> BalancedWithDistinctMachines<T> {
         rng: &mut R,
         blacklist: &HashSet<T>,
     ) -> Result<T, ()> {
-        use std::collections::hash_map::Entry;
         let resources: Vec<_> = self
             .counts
             .iter()
@@ -139,14 +144,62 @@ impl<T: std::hash::Hash + Eq + Copy> BalancedWithDistinctMachines<T> {
             Ok(elem)
         }
     }
-    ///// Convert to iterator of elements in order of selection.
-    //pub fn sample_iter<R>(mut self, mut rng: R) -> impl Iterator<Item = Result<T, ()>>
-    //where
-    //    R: Rng,
-    //    Self: Sized,
-    //{
-    //    std::iter::from_fn(move || self.sample(&mut rng))
-    //}
+}
+
+pub struct FloatBalancedWithDistinctMachines<T: std::hash::Hash> {
+    counts: HashMap<T, f32>,
+}
+
+impl<T: std::hash::Hash + Eq + Copy> FloatBalancedWithDistinctMachines<T> {
+    /// Constructs new distribution.
+    pub fn new(counts: HashMap<T, f32>) -> Self {
+        Self { counts }
+    }
+
+    /// Sample single value.
+    pub fn sample<R: Rng + ?Sized>(
+        &mut self,
+        rng: &mut R,
+        cost: f32,
+        blacklist: &HashSet<T>,
+    ) -> Result<T, ()> {
+        let resources: Vec<_> = {
+            let mut resources: Vec<_> = self
+                .counts
+                .iter()
+                .filter(|(t, &w)| !blacklist.contains(t) && w >= cost)
+                .collect();
+            if resources.is_empty() {
+                resources = self
+                    .counts
+                    .iter()
+                    .filter(|(t, _)| !blacklist.contains(t))
+                    .collect();
+            }
+            resources
+        };
+
+        if resources.is_empty() {
+            Err(())
+        } else {
+            let dist = WeightedIndex::new(resources.iter().map(|(_, &w)| w)).unwrap();
+            let elem = *resources[dist.sample(rng)].0;
+            match self.counts.entry(elem) {
+                Entry::Occupied(mut occupied) => {
+                    let value = {
+                        let value = occupied.get_mut();
+                        *value -= cost;
+                        *value
+                    };
+                    if value <= 0.0 {
+                        occupied.remove();
+                    }
+                }
+                _ => {}
+            }
+            Ok(elem)
+        }
+    }
 }
 
 /// Shard description.
@@ -350,6 +403,99 @@ where
     }
 }
 
+fn machine_costs(
+    shards: &[Shard],
+    machines: &[Machine],
+    assignment: &IndexVec<ShardId, Vec<MachineId>>,
+) -> Vec<f64> {
+    let mut machine_costs = vec![0_f64; machines.len()];
+    for (shard_id, mut machine_ids) in assignment.into_iter().enumerate() {
+        for mid in machine_ids {
+            machine_costs[mid.index()] +=
+                shards[shard_id].weight as f64 / machines[mid.index()].weight as f64;
+        }
+    }
+    machine_costs
+}
+
+pub struct WeightedBalancedRandomReplicas<R>
+where
+    R: SeedableRng,
+{
+    rng: RefCell<R>,
+}
+
+impl<R> WeightedBalancedRandomReplicas<R>
+where
+    R: SeedableRng + rand::RngCore,
+{
+    pub fn new(rng: R) -> Self {
+        Self {
+            rng: RefCell::new(rng),
+        }
+    }
+
+    fn try_assign_replicas(
+        &self,
+        shards: &[Shard],
+        machines: &[Machine],
+    ) -> Result<IndexVec<ShardId, Vec<MachineId>>, ()> {
+        use statrs::statistics::Statistics;
+        let total_budget: f32 = shards.iter().map(|s| s.weight * s.replicas as f32).sum();
+        let normalized_machine_weights: HashMap<_, _> = {
+            let total_weight: f32 = machines.iter().map(|m| m.weight).sum();
+            machines
+                .iter()
+                .enumerate()
+                .map(|(id, m)| (MachineId::new(id), total_budget * (m.weight / total_weight)))
+                .collect()
+        };
+        let mut distr = FloatBalancedWithDistinctMachines::new(normalized_machine_weights);
+        let assignment: Result<IndexVec<ShardId, Vec<MachineId>>, ()> = shards
+            .iter()
+            .map(|s| {
+                let mut machines = HashSet::<MachineId>::new();
+                for _ in 0..s.replicas {
+                    match distr.sample(&mut (*self.rng.borrow_mut()), s.weight, &machines) {
+                        Ok(m) => {
+                            machines.insert(m);
+                        }
+                        Err(()) => return Err(()),
+                    }
+                }
+                Ok(machines.into_iter().collect::<Vec<_>>())
+            })
+            .collect();
+        assignment.and_then(|a| {
+            let costs = machine_costs(shards, machines, &a);
+            let sum = costs.iter().sum::<f64>() / costs.len() as f64;
+            if costs.std_dev() / sum <= 0.02 {
+                Ok(a)
+            } else {
+                Err(())
+            }
+        })
+    }
+}
+
+impl<R> AssignReplicas for WeightedBalancedRandomReplicas<R>
+where
+    R: SeedableRng + rand::RngCore,
+{
+    fn assign_replicas(
+        &self,
+        shards: &[Shard],
+        machines: &[Machine],
+    ) -> IndexVec<ShardId, Vec<MachineId>> {
+        for _ in 0..20 {
+            if let Ok(assgn) = self.try_assign_replicas(shards, machines) {
+                return assgn;
+            }
+        }
+        panic!("Unable to assign replicas to distinct machines after 20 tries");
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -460,6 +606,52 @@ mod test {
             let min = machine_counts.iter().min().unwrap();
             let max = machine_counts.iter().max().unwrap();
             assert!(max - min <= 1);
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn test_weighted_balanced_random_replicas(seed: u64) {
+            use rand_distr::Normal;
+            let replicas = 3;
+            let num_machines = 20;
+            let num_shards = 190;
+            let mut rng = ChaChaRng::seed_from_u64(seed);
+            let mut weight_rng = ChaChaRng::from_rng(&mut rng)?;
+            let mut machine_rng = ChaChaRng::from_rng(&mut rng)?;
+            let weight_distr = Normal::new(1.0, 0.2).unwrap();
+            let distr = WeightedBalancedRandomReplicas::new(rng);
+            let shards: Vec<_> = std::iter::repeat(replicas).map(move |r| Shard {
+                replicas: r,
+                weight: match weight_distr.sample(&mut weight_rng) {
+                    v if v < 0.1 => 0.0,
+                    v => v
+                },
+            }).take(num_shards).collect();
+            let weight_distr = Normal::new(1.0, 0.2).unwrap();
+            let machines: Vec<_> = (0..num_machines).map(move |_| Machine {
+                weight: match weight_distr.sample(&mut machine_rng) {
+                    v if v < 0.1 => 0.0,
+                    v => v
+                },
+            }).collect();
+            let assignment = distr.assign_replicas(&shards, &machines);
+            let mut machine_counts = vec![0; num_machines];
+            let mut machine_costs = vec![0_f32; num_machines];
+            for (shard_id, mut machine_ids) in assignment.into_iter().enumerate() {
+                assert_eq!(machine_ids.len(), replicas);
+                machine_ids.sort();
+                machine_ids.dedup();
+                assert_eq!(machine_ids.len(), replicas);
+                for mid in machine_ids {
+                    machine_counts[mid.index()] += 1;
+                    machine_costs[mid.index()] += shards[shard_id].weight / machines[mid.index()].weight;
+                }
+            }
+            let min = machine_costs.iter().copied().map(OrderedFloat::from).min().unwrap();
+            let max = machine_costs.iter().copied().map(OrderedFloat::from).max().unwrap();
+            println!("{} {} {}", max, min, min.into_inner() / max.into_inner());
+            assert!(min.into_inner() / max.into_inner()  >= 0.90);
         }
     }
 }
