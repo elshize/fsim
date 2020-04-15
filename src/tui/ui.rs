@@ -1,6 +1,6 @@
 #![cfg_attr(tarpaulin, skip)]
 
-use crate::simulation::{ImStatus, Query, QueryStatus, Simulation, Status};
+use crate::simulation::{ImStatus, Query, QueryStatus, Status};
 use crate::tui::app::{App, Mode, QueriesView, View, Window};
 use tui::{
     backend::Backend,
@@ -64,7 +64,7 @@ fn render_logs<'a, B: Backend>(
     frame.render(&mut list, rect);
 }
 
-fn render_stats<'a, B: Backend>(
+fn render_stats<B: Backend>(
     frame: &mut Frame<B>,
     rect: Rect,
     block: Block,
@@ -93,7 +93,7 @@ fn render_stats<'a, B: Backend>(
         vec![
             String::from("Throughput"),
             match status.time().as_secs_f32() {
-                s if s == 0.0 => format!("?"),
+                s if s == 0.0 => String::from("?"),
                 s => format!("{}", (status.queries_finished() as f32) / s),
             },
         ],
@@ -108,7 +108,7 @@ fn render_stats<'a, B: Backend>(
     frame.render(&mut table, rect);
 }
 
-fn block<'a>(title: &'a str, mode: Option<Mode>) -> Block<'a> {
+fn block(title: &str, mode: Option<Mode>) -> Block {
     let block = Block::default().title(title).borders(Borders::ALL);
     match mode {
         Some(Mode::ActivePane) => block

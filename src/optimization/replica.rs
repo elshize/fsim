@@ -2,7 +2,6 @@
 
 use indexed_vec::{Idx, IndexVec};
 use itertools::Itertools;
-use ordered_float::OrderedFloat;
 use rand::{Rng, SeedableRng};
 use rand_distr::weighted::WeightedIndex;
 use rand_distr::Distribution;
@@ -104,7 +103,7 @@ impl<A: std::hash::Hash + Eq + Copy> std::iter::FromIterator<A>
         T: IntoIterator<Item = A>,
     {
         let mut counts: HashMap<A, usize> = HashMap::default();
-        for r in iter.into_iter() {
+        for r in iter {
             *counts.entry(r).or_default() += 1;
         }
         Self { counts }
@@ -113,6 +112,10 @@ impl<A: std::hash::Hash + Eq + Copy> std::iter::FromIterator<A>
 
 impl<T: std::hash::Hash + Eq + Copy> BalancedWithDistinctMachines<T> {
     /// Sample single value.
+    ///
+    /// # Errors
+    ///
+    /// See [struct-level documentation](struct.BalancedWithDistinctMachines.html).
     pub fn sample<R: Rng + ?Sized>(
         &mut self,
         rng: &mut R,
@@ -121,42 +124,57 @@ impl<T: std::hash::Hash + Eq + Copy> BalancedWithDistinctMachines<T> {
         let resources: Vec<_> = self
             .counts
             .iter()
-            .filter(|(t, _)| !blacklist.contains(t))
-            .flat_map(|(t, &count)| std::iter::repeat(t).take(count))
+            .flat_map(|(t, &count)| {
+                std::iter::repeat(t).take(if blacklist.contains(t) { 0 } else { count })
+            })
             .collect();
         if resources.is_empty() {
             Err(())
         } else {
             let elem = *resources[rng.gen::<usize>() % resources.len()];
-            match self.counts.entry(elem) {
-                Entry::Occupied(mut occupied) => {
-                    let value = {
-                        let value = occupied.get_mut();
-                        *value -= 1;
-                        *value
-                    };
-                    if value == 0 {
-                        occupied.remove();
-                    }
+            if let Entry::Occupied(mut occupied) = self.counts.entry(elem) {
+                let value = {
+                    let value = occupied.get_mut();
+                    *value -= 1;
+                    *value
+                };
+                if value == 0 {
+                    occupied.remove();
                 }
-                _ => {}
             }
             Ok(elem)
         }
     }
 }
 
+/// This is similar to [`BalancedWithDistinctMachines`] but takes into account differences
+/// in weights between the shards and machines.
+///
+/// First, all machine budgets and shard costs are normalized such that 1 cost equals 1 buget.
+/// Each time a machine is selected for a shard of weight `w`, the first step is to select randomly
+/// (but remaining budget distribution) a machine that:
+/// 1. does not have the current shard assigned,
+/// 2. has remaining budget above `w`.
+///
+/// In case none such machine exists, one is selected out of all that still have a positive budget.
+///
+/// [`BalancedWithDistinctMachines`]: trait.BalancedWithDistinctMachines.html
 pub struct FloatBalancedWithDistinctMachines<T: std::hash::Hash> {
     counts: HashMap<T, f32>,
 }
 
 impl<T: std::hash::Hash + Eq + Copy> FloatBalancedWithDistinctMachines<T> {
     /// Constructs new distribution.
+    #[must_use]
     pub fn new(counts: HashMap<T, f32>) -> Self {
         Self { counts }
     }
 
     /// Sample single value.
+    ///
+    /// # Errors
+    ///
+    /// See [struct-level documentation](struct.FloatBalancedWithDistinctMachines.html).
     pub fn sample<R: Rng + ?Sized>(
         &mut self,
         rng: &mut R,
@@ -184,18 +202,15 @@ impl<T: std::hash::Hash + Eq + Copy> FloatBalancedWithDistinctMachines<T> {
         } else {
             let dist = WeightedIndex::new(resources.iter().map(|(_, &w)| w)).unwrap();
             let elem = *resources[dist.sample(rng)].0;
-            match self.counts.entry(elem) {
-                Entry::Occupied(mut occupied) => {
-                    let value = {
-                        let value = occupied.get_mut();
-                        *value -= cost;
-                        *value
-                    };
-                    if value <= 0.0 {
-                        occupied.remove();
-                    }
+            if let Entry::Occupied(mut occupied) = self.counts.entry(elem) {
+                let value = {
+                    let value = occupied.get_mut();
+                    *value -= cost;
+                    *value
+                };
+                if value <= 0.0 {
+                    occupied.remove();
                 }
-                _ => {}
             }
             Ok(elem)
         }
@@ -230,7 +245,7 @@ trait AssignReplicas {
 pub struct JustRandomReplicas<R, D, N>
 where
     R: Rng,
-    D: rand_distr::Distribution<usize>,
+    D: Distribution<usize>,
     N: Fn(usize, usize) -> D,
 {
     rng: RefCell<R>,
@@ -240,9 +255,11 @@ where
 impl<R, D, N> JustRandomReplicas<R, D, N>
 where
     R: Rng,
-    D: rand_distr::Distribution<usize>,
+    D: Distribution<usize>,
     N: Fn(usize, usize) -> D,
 {
+    /// Constructs a new generator form a random number generator and a function constructing
+    /// a distribution on a range.
     pub fn new(rng: R, new_dist: N) -> Self {
         Self {
             rng: RefCell::new(rng),
@@ -254,7 +271,7 @@ where
 impl<R, D, N> AssignReplicas for JustRandomReplicas<R, D, N>
 where
     R: Rng,
-    D: rand_distr::Distribution<usize>,
+    D: Distribution<usize>,
     N: Fn(usize, usize) -> D,
 {
     fn assign_replicas(
@@ -300,6 +317,9 @@ where
         .collect()
 }
 
+/// Replica assignment policy that ensures the load to be balanced but have no other constraints.
+/// In particular, it is possible that two or more replicas of the same shards will be assigned
+/// to the same machine.
 pub struct BalancedRandomReplicas<R>
 where
     R: SeedableRng,
@@ -311,6 +331,7 @@ impl<R> BalancedRandomReplicas<R>
 where
     R: SeedableRng,
 {
+    /// Constructs a new generator form a random number generator.
     pub fn new(rng: R) -> Self {
         Self {
             rng: RefCell::new(rng),
@@ -354,6 +375,7 @@ impl<R> DistinctMachinesBalancedRandomReplicas<R>
 where
     R: SeedableRng + rand::RngCore,
 {
+    /// Constructs a new generator form a random number generator.
     pub fn new(rng: R) -> Self {
         Self {
             rng: RefCell::new(rng),
@@ -409,15 +431,20 @@ fn machine_costs(
     assignment: &IndexVec<ShardId, Vec<MachineId>>,
 ) -> Vec<f64> {
     let mut machine_costs = vec![0_f64; machines.len()];
-    for (shard_id, mut machine_ids) in assignment.into_iter().enumerate() {
+    for (shard_id, machine_ids) in assignment.into_iter().enumerate() {
         for mid in machine_ids {
             machine_costs[mid.index()] +=
-                shards[shard_id].weight as f64 / machines[mid.index()].weight as f64;
+                f64::from(shards[shard_id].weight) / f64::from(machines[mid.index()].weight);
         }
     }
     machine_costs
 }
 
+/// Replica assignment policy that utilizes [`FloatBalancedWithDistinctMachines`].
+/// The assignment will fail if the standard deviation of the assigned costs divided by
+/// the average cost is above 0.2. If the assignment fails after 20 tries, it will panic.
+///
+/// [`FloatBalancedWithDistinctMachines`]: struct.FloatBalancedWithDistinctMachines.html
 pub struct WeightedBalancedRandomReplicas<R>
 where
     R: SeedableRng,
@@ -429,6 +456,7 @@ impl<R> WeightedBalancedRandomReplicas<R>
 where
     R: SeedableRng + rand::RngCore,
 {
+    /// Constructs a new generator form a random number generator.
     pub fn new(rng: R) -> Self {
         Self {
             rng: RefCell::new(rng),
@@ -500,6 +528,7 @@ where
 mod test {
     use super::*;
     use crate::test::WrappingEchoDistribution;
+    use ordered_float::OrderedFloat;
     use proptest::prelude::*;
     use rand::{rngs::mock::StepRng, SeedableRng};
     use rand_chacha::ChaChaRng;

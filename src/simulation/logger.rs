@@ -66,16 +66,24 @@ impl Default for LoggerBuilder {
 
 impl LoggerBuilder {
     /// Sets level filter.
+    #[must_use]
     pub fn level(mut self, level: LevelFilter) -> Self {
         self.level = level;
         self
     }
+
     /// Sets logging target prefix.
+    #[must_use]
     pub fn target<S: Into<String>>(mut self, target: S) -> Self {
         self.target = Some(target.into());
         self
     }
+
     /// Initializes vector logger.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if unable to write to the global buffer.
     pub fn init(self) -> anyhow::Result<()> {
         if !*BUFFER_INITIALIZED
             .read()
@@ -104,6 +112,10 @@ impl LoggerBuilder {
 }
 
 /// Clears the current log buffer and returns its contents.
+///
+/// # Errors
+///
+/// Returns an error if unable to write to the global buffer.
 pub fn clear() -> anyhow::Result<Vec<String>> {
     let mut handle = LOG_BUFFER.write().map_err(|err| anyhow!("{:?}", err))?;
     Ok(handle.drain(..).collect())

@@ -15,6 +15,7 @@ use fsim::simulation::{config::Config, Simulation};
 use fsim::tui::{ActivePaneAction, App, GlobalAction, KeyBindings, NavigationAction};
 use std::fs::File;
 use std::io;
+use std::io::Write;
 use std::io::{stdin, BufRead, BufReader};
 use std::path::PathBuf;
 use structopt::StructOpt;
@@ -24,6 +25,7 @@ use termion::raw::IntoRawMode;
 use tui::backend::TermionBackend;
 use tui::Terminal;
 
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, StructOpt)]
 struct Opt {
     /// Simulation configuration file.
@@ -67,14 +69,14 @@ impl<'a> Input<'a> {
             None => Input(Box::new(BufReader::new(stdin()))),
         })
     }
-    fn reader(&mut self) -> &mut Box<dyn BufRead + 'a> {
+    fn reader(&mut self) -> &mut dyn BufRead {
         &mut self.0
     }
 }
 
 fn format_key(key: Key) -> String {
     match key {
-        Key::Char('\n') => format!("Enter"),
+        Key::Char('\n') => "Enter".to_string(),
         Key::Char(c) => format!("{}", c),
         Key::Ctrl(c) => format!("Ctrl+{}", c),
         _ => format!("{:?}", key),
@@ -125,16 +127,15 @@ fn run(opt: Opt) -> Result<()> {
             .map(|elem| elem.context("Failed to parse query"))
             .collect();
     let app =
-        App::new(Simulation::new(config, queries?)).with_log_history_size(opt.log_history_size);
+        App::new(Simulation::new(&config, queries?)).with_log_history_size(opt.log_history_size);
 
-    use std::io::Write;
     write!(io::stdout().into_raw_mode()?, "{}", termion::clear::All).unwrap();
 
     let stdout = io::stdout().into_raw_mode()?;
     let backend = TermionBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     terminal.hide_cursor()?;
-    app.event_loop(KeyBindings::default(), &mut terminal)?;
+    app.event_loop(&KeyBindings::default(), &mut terminal)?;
     terminal.show_cursor()?;
     Ok(())
 }

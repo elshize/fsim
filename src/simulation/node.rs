@@ -31,7 +31,7 @@ impl<'a> Runnable for Node<'a> {
     type Effect = Effect<'a>;
 
     fn run(&self, entry: Self::Payload) -> Self::Effect {
-        use NodeStage::*;
+        use NodeStage::{GetQuery, Retrieval};
         match entry {
             GetQuery => {
                 let id = self.id;

@@ -99,6 +99,7 @@ pub struct ProbabilityRouting {
 
 impl ProbabilityRouting {
     /// Constructs a routing instance with requested numbers of nodes and shards.
+    #[must_use]
     pub fn new(nodes: usize, shards: usize) -> Self {
         Self {
             nodes: DMatrix::from_element(nodes, shards, 0.0),
@@ -127,14 +128,13 @@ impl ProbabilityRouting {
     }
 
     /// Scale node weights. The larger the value, the slower the machine.
+    ///
+    /// # Errors
+    ///
+    /// An error will be returned if the number of factors passed to the functions does not match
+    /// the number of nodes.
     pub fn scale_nodes(&mut self, factors: &[f32]) -> Result<&mut Self> {
-        if factors.len() != self.num_nodes() {
-            Err(anyhow!(
-                "Number of scaling factors ({}) must match number of nodes ({})",
-                factors.len(),
-                self.num_nodes()
-            ))
-        } else {
+        if factors.len() == self.num_nodes() {
             let vec = DVector::from_column_slice(factors);
             for (mut column, m) in self.nodes.column_iter_mut().zip(vec.iter()) {
                 for elem in column.iter_mut() {
@@ -142,18 +142,23 @@ impl ProbabilityRouting {
                 }
             }
             Ok(self)
+        } else {
+            Err(anyhow!(
+                "Number of scaling factors ({}) must match number of nodes ({})",
+                factors.len(),
+                self.num_nodes()
+            ))
         }
     }
 
     /// Scale shard weights. The larger the value, the slower retrieval.
+    ///
+    /// # Errors
+    ///
+    /// An error will be returned if the number of factors passed to the functions does not match
+    /// the number of shards.
     pub fn scale_shards(&mut self, factors: &[f32]) -> Result<&mut Self> {
-        if factors.len() != self.num_shards() {
-            Err(anyhow!(
-                "Number of scaling factors ({}) must match number of shards ({})",
-                factors.len(),
-                self.num_shards()
-            ))
-        } else {
+        if factors.len() == self.num_shards() {
             let vec = DVector::from_row_slice(factors);
             for mut column in self.nodes.column_iter_mut() {
                 for (a, b) in column.iter_mut().zip(vec.iter()) {
@@ -161,20 +166,28 @@ impl ProbabilityRouting {
                 }
             }
             Ok(self)
+        } else {
+            Err(anyhow!(
+                "Number of scaling factors ({}) must match number of shards ({})",
+                factors.len(),
+                self.num_shards()
+            ))
         }
     }
 
     /// Optimizes routing.
-    pub fn optimize<O: Optimizer>(self, optimizer: O) -> DMatrix<f32> {
+    pub fn optimize<O: Optimizer>(self, optimizer: &O) -> DMatrix<f32> {
         optimizer.optimize(self)
     }
 
     /// Number of shards.
+    #[must_use]
     pub fn num_shards(&self) -> usize {
         self.nodes.nrows()
     }
 
     /// Number of nodes.
+    #[must_use]
     pub fn num_nodes(&self) -> usize {
         self.nodes.ncols()
     }

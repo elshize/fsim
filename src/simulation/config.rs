@@ -38,17 +38,20 @@ pub struct Assignment {
 impl Assignment {
     /// Returns the number of shards in the assignment. Returns 0 if no weights available.
     pub fn num_shards(&self) -> usize {
-        self.weights.get(0).map(Vec::len).unwrap_or(0)
+        self.weights.get(0).map_or(0, Vec::len)
     }
     /// Returns the number of nodes in the assignment. Returns 0 if no weights available.
+    #[must_use]
     pub fn num_nodes(&self) -> usize {
         self.weights.len()
     }
     /// Assignment weights
+    #[must_use]
     pub fn weights(&self) -> &[Vec<f32>] {
         &self.weights
     }
     /// Assignment weights
+    #[must_use]
     pub fn weights_by_shard(&self) -> Vec<Vec<f32>> {
         let mut weights: Vec<Vec<f32>> = vec![vec![0_f32; self.num_nodes()]; self.num_shards()];
         for (sidx, shards) in weights.iter_mut().enumerate() {

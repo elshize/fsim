@@ -74,11 +74,11 @@ where
     type Effect = Effect<'a>;
 
     fn run(&self, entry: Self::Payload) -> Self::Effect {
+        use std::convert::TryFrom;
         use std::ops::DerefMut;
         use Process::QueryGenerator;
-        use QueryGeneratorStage::*;
         match entry {
-            Generate => {
+            QueryGeneratorStage::Generate => {
                 let query_idx = self.query_dist.sample(self.rand.borrow_mut().deref_mut());
                 trace!("Query {} entering incoming queue", query_idx);
                 let request_id = self.counter.get();
@@ -88,18 +88,25 @@ where
                         id: self.queries[query_idx],
                         request: RequestId(request_id),
                     },
-                    QueryGenerator(Timeout),
+                    QueryGenerator(QueryGeneratorStage::Timeout),
                 )
             }
-            Timeout => {
+            QueryGeneratorStage::Timeout => {
                 let timeout = self.time_dist.sample(self.rand.borrow_mut().deref_mut());
                 let timeout = match timeout.partial_cmp(&0_f32) {
                     None | Some(std::cmp::Ordering::Less) => 0_f32,
                     _ => timeout,
                 };
-                let timeout = (self.duration_from_u64)(timeout.round() as u64);
+                // TODO(michal): Change to `approx_unchecked_to` when stabilized:
+                //               https://github.com/rust-lang/rust/pull/66841
+                #[allow(clippy::cast_possible_truncation)]
+                let timeout =
+                    (self.duration_from_u64)(u64::try_from(timeout.round() as i64).unwrap());
                 trace!("Scheduling new query in {:?}", timeout);
-                Effect::Schedule(Event::new(timeout, QueryGenerator(Generate)))
+                Effect::Schedule(Event::new(
+                    timeout,
+                    QueryGenerator(QueryGeneratorStage::Generate),
+                ))
             }
         }
     }

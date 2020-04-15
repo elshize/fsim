@@ -27,29 +27,20 @@ pub fn init_event_receiver(tick_rate: Duration, exit_keys: HashSet<Key>) -> mpsc
         thread::spawn(move || {
             let stdin = io::stdin();
             for evt in stdin.keys() {
-                match evt {
-                    Ok(key) => {
-                        if let Err(_) = tx.send(Event::Input(key)) {
-                            return;
-                        }
-                        if exit_keys.contains(&key) {
-                            return;
-                        }
+                if let Ok(key) = evt {
+                    if tx.send(Event::Input(key)).is_err() {
+                        return;
                     }
-                    Err(_) => {}
+                    if exit_keys.contains(&key) {
+                        return;
+                    }
                 }
             }
         })
     };
-    {
-        let tx = tx.clone();
-        thread::spawn(move || {
-            let tx = tx.clone();
-            loop {
-                tx.send(Event::Tick).unwrap();
-                thread::sleep(tick_rate);
-            }
-        })
-    };
+    thread::spawn(move || loop {
+        tx.send(Event::Tick).unwrap();
+        thread::sleep(tick_rate);
+    });
     rx
 }

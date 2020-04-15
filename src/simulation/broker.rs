@@ -49,7 +49,7 @@ impl<'a> Runnable for Broker<'a> {
     type Effect = Effect<'a>;
 
     fn run(&self, entry: Self::Payload) -> Self::Effect {
-        use BrokerStage::*;
+        use BrokerStage::{Dispatch, RequestQuery, Select};
         match entry {
             RequestQuery => {
                 Effect::QueryQueueGet(ProcessCallback::new(|q| Process::Broker(Select(q))))
@@ -68,7 +68,6 @@ impl<'a> Runnable for Broker<'a> {
                     timeout,
                     query,
                     nodes: replicas
-                        .into_iter()
                         .map(|ReplicaId { node, shard }| NodeRequest { id: node, shard })
                         .collect(),
                 }

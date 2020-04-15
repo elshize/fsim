@@ -124,8 +124,7 @@ impl crate::simulation::Status for Status {
     fn finish_shard(&mut self, query: Query, time: Duration) {
         match self.active_query(&query).finish_shard(time) {
             s if s.is_finished() => {
-                self.queries_incomplete =
-                    self.queries_incomplete + if s.num_dropped() > 0 { 1 } else { 0 };
+                self.queries_incomplete += if s.num_dropped() > 0 { 1 } else { 0 };
                 self.active_queries.remove(&query);
                 self.past_queries.insert(query, s);
                 //Self {

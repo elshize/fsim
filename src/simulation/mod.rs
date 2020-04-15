@@ -91,9 +91,6 @@ pub use im_status::Status as ImStatus;
 
 pub mod logger;
 
-mod history;
-pub use history::{History, PersistentHistory};
-
 mod progression;
 pub use progression::{Progression, ReversibleProgression};
 
@@ -321,44 +318,10 @@ fn duration_constructor(unit: TimeUnit) -> Box<dyn Fn(u64) -> Duration> {
     })
 }
 
-//pub trait SimulationStatus {
-//    //
-//}
-//
-//pub trait Schedulable {
-//    /// Schedule a process to run at `time`.
-//    fn schedule(&mut self, time: Duration, process: Process);
-//}
-//
-//pub trait ForwardSimulation: Schedulable {
-//    type Status;
-//
-//    /// Advance one step forward.
-//    fn advance(&mut self);
-//
-//    /// Run a number of steps.
-//    fn run_steps(&mut self, steps: usize);
-//
-//    /// Run until certain time.
-//    fn run_until(&mut self, time: Duration);
-//
-//    /// Run until no events are found.
-//    fn run(&mut self);
-//
-//    /// Returns the current simulation step.
-//    fn step(&self) -> usize;
-//
-//    /// Returns the current simulation status.
-//    fn status(&self) -> &Self::Status;
-//}
-//
-//pub trait RewindableSimulation: ForwardSimulation {
-//    /// Goes back in history. If no past steps exist, it returns an error.
-//    fn step_back(&mut self) -> Result<(), ()>;
-//    /// Returns past history.
-//    fn history(&self) -> Vec<&Status>;
-//}
+type DefaultQueryGenerator<'a> =
+    QueryGenerator<'a, Normal<f32>, Uniform<usize>, Box<dyn Fn(u64) -> Duration>>;
 
+/// The simulation.
 pub struct Simulation<'a, P> {
     /// Queue of the future events that will be processed in order of time.
     scheduled_events: BinaryHeap<Reverse<Event>>,
@@ -368,21 +331,29 @@ pub struct Simulation<'a, P> {
     /// Nodes. Each contains a number of shard replicas.
     nodes: Vec<NodeEntry<'a>>,
 
-    query_generator: QueryGenerator<'a, Normal<f32>, Uniform<usize>, Box<dyn Fn(u64) -> Duration>>,
+    query_generator: DefaultQueryGenerator<'a>,
     broker: Broker<'a>,
     query_data: Rc<Vec<config::Query>>,
     time_unit: TimeUnit,
     progression: P,
 }
 
+/// The result of running simulation for a number of steps or a given interval of time.
+pub enum RunResult {
+    /// The requested execution has finished.
+    Complete,
+    /// The simulation finished prematurely because no more events to run are available.
+    Incomplete,
+}
+
 impl<'a, P: Progression> Simulation<'a, P> {
     /// Constructs a new routing simulation from a config and input queries.
-    pub fn new(config: Config, queries: Vec<config::Query>) -> Self {
+    #[must_use]
+    pub fn new(config: &Config, queries: Vec<config::Query>) -> Self {
         let query_selection_dist = Uniform::from(0..queries.len());
         let mut seeder = config
             .seed
-            .map(|seed| ChaChaRng::seed_from_u64(seed))
-            .unwrap_or_else(|| ChaChaRng::from_entropy());
+            .map_or_else(ChaChaRng::from_entropy, ChaChaRng::seed_from_u64);
         let mut sim = Self {
             incoming_queries: Default::default(),
             scheduled_events: BinaryHeap::new(),
@@ -444,7 +415,7 @@ impl<'a, P: Progression> Simulation<'a, P> {
             .collect()
     }
 
-    pub(crate) fn log_event(&self, time: Duration, process: &Process) {
+    pub(crate) fn log_event(time: Duration, process: &Process) {
         match process {
             Process::QueryGenerator(stage) => match stage {
                 QueryGeneratorStage::Generate => {
@@ -503,7 +474,7 @@ impl<'a, P: Progression> Simulation<'a, P> {
         match process {
             Process::QueryGenerator(stage) => self.query_generator.run(stage),
             Process::Broker(stage) => {
-                if let &BrokerStage::Select(query) = &stage {
+                if let BrokerStage::Select(query) = stage {
                     status.pick_up_query(query, time);
                 }
                 self.broker.run(stage)
@@ -523,7 +494,10 @@ impl<'a, P: Progression> Simulation<'a, P> {
         effect: Effect<'a>,
         status: &mut P::Status,
     ) {
-        use Effect::*;
+        use Effect::{
+            Aggregate, Dispatch, NodeQueryGet, QueryQueueGet, QueryQueuePut, Route, Schedule,
+            ScheduleMany,
+        };
         match effect {
             Schedule(event) => {
                 self.schedule(time + event.time, event.process);
@@ -596,10 +570,6 @@ impl<'a, P: Progression> Simulation<'a, P> {
         }
     }
 
-    pub(crate) fn next_event(&mut self) -> Option<Reverse<Event>> {
-        self.scheduled_events.pop()
-    }
-
     fn assert_time(&self, time: &Duration, process: &Process) {
         assert!(
             &self.status().time() <= time,
@@ -613,13 +583,17 @@ impl<'a, P: Progression> Simulation<'a, P> {
         );
     }
 
-    pub fn advance(&mut self) {
+    /// Advance one step.
+    ///
+    /// It returns `Incomplete` if no more events are scheduled.
+    /// See [`RunResult`](enum.RunResult.html).
+    pub fn advance(&mut self) -> RunResult {
         if self.progression.next().is_ok() {
-            return;
+            return RunResult::Complete;
         }
         if let Some(Reverse(Event { time, process })) = self.scheduled_events.pop() {
             self.assert_time(&time, &process);
-            self.log_event(time, &process);
+            Self::log_event(time, &process);
             let status = self.progression.init_step();
             let effect = self.run_process(time, process, &mut status.borrow_mut());
             self.handle_effect(time, effect, &mut status.borrow_mut());
@@ -629,121 +603,75 @@ impl<'a, P: Progression> Simulation<'a, P> {
                     .into_iter(),
             );
             self.progression.record(status.into_inner());
+            RunResult::Complete
+        } else {
+            RunResult::Incomplete
         }
     }
 
+    /// Schedules `process` to be executed at `time`.
     pub fn schedule(&mut self, time: Duration, process: Process) {
         self.scheduled_events
             .push(Reverse(Event::new(time, process)));
     }
 
+    /// Run the simulation indefinitely. It will only stop if there are no more events scheduled.
     pub fn run(&mut self) {
         while !self.scheduled_events.is_empty() {
             self.advance();
         }
     }
 
-    pub fn run_until(&mut self, time: Duration) {
+    /// Run simulation for a given time interval.
+    ///
+    /// The results describes whether or not the requested interval has passed.
+    /// See [`RunResult`](enum.RunResult.html).
+    pub fn run_until(&mut self, time: Duration) -> RunResult {
         while !self.scheduled_events.is_empty() && self.status().time() < time {
             self.advance();
         }
-    }
-
-    pub fn run_steps(&mut self, steps: usize) {
-        for _ in 0..steps {
-            if self.scheduled_events.is_empty() {
-                break;
-            }
-            self.advance();
+        if self.status().time() < time {
+            RunResult::Incomplete
+        } else {
+            RunResult::Complete
         }
     }
 
+    /// Run simulation for `steps` number of steps.
+    ///
+    /// The results describes whether or not the requested number of steps have been executed.
+    /// See [`RunResult`](enum.RunResult.html).
+    pub fn run_steps(&mut self, steps: usize) -> RunResult {
+        for _ in 0..steps {
+            if self.scheduled_events.is_empty() {
+                return RunResult::Incomplete;
+            }
+            self.advance();
+        }
+        RunResult::Complete
+    }
+
+    /// Number of steps from the beginning of the simulation.
     pub fn step(&self) -> usize {
         self.progression.step()
     }
 
+    /// Current status of the simulation.
     pub fn status(&self) -> &P::Status {
         self.progression.status()
     }
 }
 
 impl<'a> Simulation<'a, ReversibleProgression> {
+    /// Go one step back in the history of the simulation.
+    ///
+    /// # Errors
+    ///
+    /// It returns an error if the current state is the initial state of the simulation.
     pub fn step_back(&mut self) -> Result<(), ()> {
         self.progression.prev()
     }
 }
-
-//impl<'a, H> Schedulable for Simulation<'a, H> {
-//    fn schedule(&mut self, time: Duration, process: Process) {
-//        self.scheduled_events
-//            .push(Reverse(Event::new(time, process)));
-//    }
-//}
-//
-//impl<'a> ForwardSimulation for Simulation<'a, PersistentHistory> {
-//    type Status = Status;
-//
-//    fn advance(&mut self) {
-//        if let Some(next) = self.history.next() {
-//            self.history.record(next);
-//            return;
-//        }
-//        if let Some(Reverse(Event { time, process })) = self.scheduled_events.pop() {
-//            assert!(
-//                self.status().time() <= time,
-//                "Current event scheduled at time {:?}, which is earlier than current time {:?}: {:?}",
-//                time,
-//                self.status().time(),
-//                Event { time, process },
-//            );
-//
-//            self.log_event(time, &process);
-//            let (effect, status) = self.run_process(time, process, self.status().clone());
-//            let status = self.handle_effect(time, effect, status);
-//            self.history.record(
-//                status.log_events(
-//                    logger::clear()
-//                        .expect("Unable to retrieve logs")
-//                        .into_iter(),
-//                ),
-//            );
-//        }
-//    }
-//    fn run(&mut self) {
-//        while !self.scheduled_events.is_empty() {
-//            self.advance();
-//        }
-//    }
-//    fn run_until(&mut self, time: Duration) {
-//        while !self.scheduled_events.is_empty() && self.status().time() < time {
-//            self.advance();
-//        }
-//    }
-//    fn run_steps(&mut self, steps: usize) {
-//        for _ in 0..steps {
-//            if self.scheduled_events.is_empty() {
-//                break;
-//            }
-//            self.advance();
-//        }
-//    }
-//    fn step(&self) -> usize {
-//        self.history.step()
-//    }
-//    fn status(&self) -> &Self::Status {
-//        self.history.status()
-//    }
-//}
-//
-//impl<'a> RewindableSimulation for Simulation<'a, PersistentHistory> {
-//    fn step_back(&mut self) -> Result<(), ()> {
-//        self.history.step_back()
-//    }
-//
-//    fn history(&self) -> Vec<&Status> {
-//        self.history.past()
-//    }
-//}
 
 #[cfg(test)]
 mod test {
@@ -811,7 +739,7 @@ assignment:
     - [1, 1, 0]
     - [0, 1, 1]"#;
         let sim = Simulation::<ReversibleProgression>::new(
-            Config::from_yaml(Cursor::new(config)).unwrap(),
+            &Config::from_yaml(Cursor::new(config)).unwrap(),
             vec![config::Query {
                 selected_shards: None,
                 selection_time: 0,

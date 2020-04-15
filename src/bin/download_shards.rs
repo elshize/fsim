@@ -74,7 +74,7 @@ impl fmt::Display for Clustering {
 }
 
 /// Downloads shard partitioning from
-/// http://boston.lti.cs.cmu.edu/appendices/CIKM2016-Dai/
+/// <http://boston.lti.cs.cmu.edu/appendices/CIKM2016-Dai/>
 /// and renames the files to start from 0.
 #[derive(Debug, StructOpt)]
 struct Opt {
@@ -116,7 +116,7 @@ fn download_file<P: AsRef<Path>>(src: Url, dest: P) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn run(opt: Opt) -> anyhow::Result<()> {
+fn run(opt: &Opt) -> anyhow::Result<()> {
     for shard in 0..opt.num_shards() {
         let src = opt.url().join(&(shard + 1).to_string())?;
         let dst = opt.output_dir.join(shard.to_string());
@@ -127,7 +127,7 @@ fn run(opt: Opt) -> anyhow::Result<()> {
 }
 
 fn main() {
-    if let Err(err) = run(Opt::from_args()) {
+    if let Err(err) = run(&Opt::from_args()) {
         println!("{}", err);
     }
 }

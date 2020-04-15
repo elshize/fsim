@@ -65,7 +65,6 @@ fn count_lines(path: &Path) -> anyhow::Result<usize> {
 fn assignment<'a>(ids: &'a [usize], num_shards: usize) -> impl Iterator<Item = usize> + 'a {
     let shard_size = (ids.len() + num_shards - 1) / num_shards;
     ids.chunks(shard_size)
-        .into_iter()
         .enumerate()
         .map(|(shard, documents)| {
             let mut documents: Vec<_> = documents.iter().map(|d| (d, shard)).collect();
@@ -123,7 +122,7 @@ fn write_shards<R: BufRead, A: Iterator<Item = usize>>(
         ProgressBar::new(len)
     };
     for (document, shard) in input.lines().zip(assignment).progress_with(progress) {
-        write!(&mut outputs[shard], "{}\n", document?)?;
+        writeln!(&mut outputs[shard], "{}", document?)?;
     }
     Ok(())
 }

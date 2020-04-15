@@ -131,6 +131,7 @@ impl<'a, T: std::fmt::Debug, P> Default for Queue<'a, T, P> {
 
 impl<'a, T: std::fmt::Debug, P> Queue<'a, T, P> {
     /// Constructs a new unbounded queue.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             elements: VecDeque::new(),
@@ -141,6 +142,7 @@ impl<'a, T: std::fmt::Debug, P> Queue<'a, T, P> {
     }
 
     /// Constructs a new queue of capacity `capacity`.
+    #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             elements: VecDeque::new(),
@@ -213,6 +215,7 @@ impl<'a, T: std::fmt::Debug, P> Queue<'a, T, P> {
     }
 
     /// Checks if there are no elements in the queue.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.elements.len() == 0
     }

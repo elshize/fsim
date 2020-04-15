@@ -8,7 +8,11 @@
     unused_qualifications
 )]
 #![warn(clippy::all, clippy::pedantic)]
-#![allow(clippy::module_name_repetitions, clippy::default_trait_access)]
+#![allow(
+    clippy::module_name_repetitions,
+    clippy::default_trait_access,
+    clippy::cast_precision_loss
+)]
 
 pub mod optimization;
 pub mod simulation;

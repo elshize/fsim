@@ -1,6 +1,4 @@
-use crate::simulation::{
-    Progression, Query, QueryStatus, ReversibleProgression, Simulation, Status,
-};
+use crate::simulation::{Query, QueryStatus, ReversibleProgression, Simulation, Status};
 use crate::tui::event::{init_event_receiver, Event};
 use crate::tui::keys::{ActivePaneAction, GlobalAction, KeyBindings, NavigationAction};
 use std::cell::RefCell;
@@ -50,6 +48,7 @@ pub(crate) enum View {
     Stats,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum VerticalDirection {
     Up,
     Down,
@@ -60,7 +59,7 @@ pub enum VerticalDirection {
 impl View {
     /// Returns the view to the left (or self if at edge).
     pub fn left(self) -> View {
-        use View::*;
+        use View::{ActiveQueries, FinishedQueries, Logs, Stats};
         match self {
             ActiveQueries(_) | FinishedQueries(_) => self,
             Logs(_) => FinishedQueries(QueriesView::default()),
@@ -69,7 +68,7 @@ impl View {
     }
     /// Returns the view to the right (or self if at edge).
     pub fn right(self) -> View {
-        use View::*;
+        use View::{ActiveQueries, FinishedQueries, Logs, Stats};
         match self {
             ActiveQueries(_) => Stats,
             FinishedQueries(_) => Logs(None),
@@ -78,7 +77,7 @@ impl View {
     }
     /// Returns the view down (or self if at edge).
     pub fn down(self) -> View {
-        use View::*;
+        use View::{ActiveQueries, FinishedQueries, Logs, Stats};
         match self {
             ActiveQueries(_) => FinishedQueries(QueriesView::default()),
             Stats => Logs(None),
@@ -87,7 +86,7 @@ impl View {
     }
     /// Returns the view up (or self if at edge).
     pub fn up(self) -> View {
-        use View::*;
+        use View::{ActiveQueries, FinishedQueries, Logs, Stats};
         match self {
             ActiveQueries(_) | Stats => self,
             Logs(_) => Stats,
@@ -97,7 +96,7 @@ impl View {
 
     /// Returns the selected item.
     pub fn selected(self) -> Option<usize> {
-        use View::*;
+        use View::{ActiveQueries, FinishedQueries, Logs};
         match self {
             ActiveQueries(QueriesView::List(idx)) | FinishedQueries(QueriesView::List(idx)) => idx,
             Logs(item) => item,
@@ -107,7 +106,7 @@ impl View {
 
     /// Returns the current list length.
     pub fn list_length(self, snapshot: &Snapshot) -> usize {
-        use View::*;
+        use View::{ActiveQueries, FinishedQueries, Logs};
         match self {
             ActiveQueries(QueriesView::List(_)) => snapshot.active_queries.len(),
             FinishedQueries(QueriesView::List(_)) => snapshot.finished_queries.len(),
@@ -117,9 +116,8 @@ impl View {
     }
 
     pub fn activate(self, snapshot: &Snapshot) -> View {
-        use View::*;
         match self {
-            Logs(_) => Logs(match snapshot.logs.len() {
+            View::Logs(_) => View::Logs(match snapshot.logs.len() {
                 0 => None,
                 len => Some(len - 1),
             }),
@@ -129,7 +127,7 @@ impl View {
 
     /// Selects an item.
     pub fn select(self, idx: usize) -> View {
-        use View::*;
+        use View::{ActiveQueries, FinishedQueries, Logs};
         match self {
             ActiveQueries(QueriesView::List(_)) => ActiveQueries(QueriesView::List(Some(idx))),
             Logs(_) => Logs(Some(idx)),
@@ -144,15 +142,15 @@ impl View {
     }
 
     /// Selects an item.
-    pub fn move_selection<'a>(self, direction: VerticalDirection, app: &App) -> View {
+    pub fn move_selection(self, direction: VerticalDirection, app: &App) -> View {
         if let Some(selected) = self.selected() {
             if let Some(last) = self.list_length(&app.snapshot).checked_sub(1) {
                 match direction {
-                    VerticalDirection::Up => self.select(selected.checked_sub(1).unwrap_or(0)),
+                    VerticalDirection::Up => self.select(selected.saturating_sub(1)),
                     VerticalDirection::Down => self.select(std::cmp::min(last, selected + 1)),
                     VerticalDirection::PageUp => {
                         let shift = usize::from(self.frame_height(app)) / 2;
-                        self.select(selected.checked_sub(shift).unwrap_or(0))
+                        self.select(selected.saturating_sub(shift))
                     }
                     VerticalDirection::PageDown => {
                         let shift = usize::from(self.frame_height(app)) / 2;
@@ -169,7 +167,7 @@ impl View {
 
     /// Is view a list.
     pub fn is_list(self) -> bool {
-        use View::*;
+        use View::{ActiveQueries, FinishedQueries, Logs};
         match self {
             ActiveQueries(QueriesView::List(_))
             | FinishedQueries(QueriesView::List(_))
@@ -180,7 +178,7 @@ impl View {
 
     /// Return back.
     pub fn back(self) -> View {
-        use View::*;
+        use View::{ActiveQueries, FinishedQueries, Logs};
         match self {
             ActiveQueries(QueriesView::List(_)) => ActiveQueries(QueriesView::List(None)),
             FinishedQueries(QueriesView::List(_)) => FinishedQueries(QueriesView::List(None)),
@@ -197,7 +195,7 @@ impl View {
 
     /// Enters details.
     pub fn details(self) -> View {
-        use View::*;
+        use View::{ActiveQueries, FinishedQueries};
         match self {
             ActiveQueries(QueriesView::List(Some(item))) => {
                 ActiveQueries(QueriesView::Details(item))
@@ -211,7 +209,7 @@ impl View {
 
     /// Returns `self` if it matches the type of passed view, or that view otherwise.
     pub fn match_or(self, view: View) -> View {
-        use View::*;
+        use View::{ActiveQueries, FinishedQueries, Logs, Stats};
         match (self, view) {
             (ActiveQueries(_), ActiveQueries(_))
             | (FinishedQueries(_), FinishedQueries(_))
@@ -265,18 +263,17 @@ impl Frames {
     }
 
     pub(crate) fn set_frame(&mut self, view: View, frame: Rect) {
-        use View::*;
         match view {
-            ActiveQueries(_) => {
+            View::ActiveQueries(_) => {
                 self.active = Some(frame);
             }
-            FinishedQueries(_) => {
+            View::FinishedQueries(_) => {
                 self.finished = Some(frame);
             }
-            Stats => {
+            View::Stats => {
                 self.status = Some(frame);
             }
-            Logs(_) => {
+            View::Logs(_) => {
                 self.logs = Some(frame);
             }
         }
@@ -315,15 +312,14 @@ impl<'a> App<'a> {
     }
 
     fn frame_height(&self, view: View) -> u16 {
-        use View::*;
+        use View::{ActiveQueries, FinishedQueries, Logs, Stats};
         match view {
             ActiveQueries(_) => self.frames.active.as_ref(),
             FinishedQueries(_) => self.frames.finished.as_ref(),
             Logs(_) => self.frames.logs.as_ref(),
             Stats => self.frames.status.as_ref(),
         }
-        .map(|f| f.height)
-        .unwrap_or(0)
+        .map_or(0, |f| f.height)
     }
 
     fn queries_snapshot<'q>(
@@ -358,7 +354,7 @@ impl<'a> App<'a> {
     }
 
     fn prev_step(&mut self) {
-        if let Ok(_) = self.sim.step_back() {
+        if self.sim.step_back().is_ok() {
             self.update_snapshot();
         }
     }
@@ -372,14 +368,14 @@ impl<'a> App<'a> {
     }
 
     fn prev_second(&mut self) {
-        if let Ok(_) = self.sim.step_back() {
+        if self.sim.step_back().is_ok() {
             self.update_snapshot();
         }
     }
 
     /// Handle keys in navigation mode (selecting pane).
     fn handle_navigation(&self, bindings: &KeyBindings, view: View, key: Key) -> Window {
-        use NavigationAction::*;
+        use NavigationAction::{Down, Enter, Left, Right, Up};
         match bindings.navigation_action(key) {
             Ok(Left) => Window::Main(view.left(), Mode::Navigation),
             Ok(Up) => Window::Main(view.up(), Mode::Navigation),
@@ -392,7 +388,9 @@ impl<'a> App<'a> {
 
     /// Handle keys in active pane mode.
     fn handle_active_pane(&self, bindings: &KeyBindings, view: View, key: Key) -> Window {
-        use ActivePaneAction::*;
+        use ActivePaneAction::{
+            Back, Details, End, Home, ItemDown, ItemUp, Maximize, PageDown, PageUp,
+        };
         match bindings.active_pane_action(key) {
             Ok(Back) => Window::Main(
                 view.back(),
@@ -442,7 +440,9 @@ impl<'a> App<'a> {
 
     /// Handle keys in active pane mode.
     pub(super) fn handle_maximized(&self, bindings: &KeyBindings, view: View, key: Key) -> Window {
-        use ActivePaneAction::*;
+        use ActivePaneAction::{
+            Back, Details, End, Home, ItemDown, ItemUp, Maximize, PageDown, PageUp,
+        };
         match bindings.active_pane_action(key) {
             Ok(Back) => {
                 if view.is_list() {
@@ -480,13 +480,16 @@ impl<'a> App<'a> {
     }
 
     /// Run application event loop.
+    ///
+    /// # Errors
+    ///
+    /// It will return an error if it fails to receive a key event.
     pub fn event_loop<B: ::tui::backend::Backend>(
         self,
-        keys: KeyBindings,
+        keys: &KeyBindings,
         terminal: &mut ::tui::Terminal<B>,
     ) -> anyhow::Result<()> {
         let app = Rc::new(RefCell::new(self));
-        use Mode::*;
         let events = init_event_receiver(
             Duration::from_millis(200),
             keys.global_bindings(GlobalAction::Exit).collect(),
@@ -517,10 +520,10 @@ impl<'a> App<'a> {
                     Err(key) => {
                         let window = app.borrow().window;
                         match window {
-                            Window::Main(view, Navigation) => {
+                            Window::Main(view, Mode::Navigation) => {
                                 app.borrow_mut().handle_navigation(&keys, view, key)
                             }
-                            Window::Main(view, ActivePane) => {
+                            Window::Main(view, Mode::ActivePane) => {
                                 app.borrow_mut().handle_active_pane(&keys, view, key)
                             }
                             Window::Maximized(view) => {
@@ -546,7 +549,7 @@ mod test {
         #[test]
         fn test_random_selector(sequence in prop::collection::vec(prop::bool::ANY, 100)) {
             let sim = Simulation::new(
-                Config::from_yaml(File::open("tests/config.yml").unwrap()).unwrap(),
+                &Config::from_yaml(File::open("tests/config.yml").unwrap()).unwrap(),
                 serde_json::Deserializer::from_reader(File::open("tests/queries.jl").unwrap())
                     .into_iter()
                     .map(|elem| elem.expect("Failed to parse query"))

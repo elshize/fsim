@@ -41,6 +41,7 @@ pub struct Query {
 
 impl Query {
     /// Constructs a new query with the given query ID and request ID.
+    #[must_use]
     pub fn new(id: QueryId, request: RequestId) -> Self {
         Self { id, request }
     }
@@ -126,13 +127,15 @@ pub enum QueryStatus {
 
 impl QueryStatus {
     /// Constructs a new status of a query that arrived at `time` to the system.
+    #[must_use]
     pub fn new(time: Duration) -> Self {
         Self::New(time)
     }
 
     /// Returns the time at which the query entered the incoming queue.
+    #[must_use]
     pub fn entry_time(&self) -> Duration {
-        use QueryStatus::*;
+        use QueryStatus::{Dispatched, Finished, New, PickedUp};
         match self {
             New(duration) => *duration,
             PickedUp(PickedUpQueryStatus { entry, .. })
@@ -142,8 +145,9 @@ impl QueryStatus {
     }
 
     /// Returns the time at which the query was picked up by a broker.
+    #[must_use]
     pub fn pick_up_time(&self) -> Option<Duration> {
-        use QueryStatus::*;
+        use QueryStatus::{Dispatched, Finished, New, PickedUp};
         match self {
             New(_) => None,
             PickedUp(PickedUpQueryStatus { broker, .. })
@@ -153,8 +157,9 @@ impl QueryStatus {
     }
 
     /// Returns the time at which the query was dispatched to shard nodes.
+    #[must_use]
     pub fn dispatch_time(&self) -> Option<Duration> {
-        use QueryStatus::*;
+        use QueryStatus::{Dispatched, Finished, New, PickedUp};
         match self {
             New(_) | PickedUp(_) => None,
             Dispatched(DispatchedQueryStatus { dispatch, .. })
@@ -163,8 +168,9 @@ impl QueryStatus {
     }
 
     /// Returns the time at which the query was finished.
+    #[must_use]
     pub fn finish_time(&self) -> Option<Duration> {
-        use QueryStatus::*;
+        use QueryStatus::{Dispatched, Finished, New, PickedUp};
         match self {
             New(_) | PickedUp(_) | Dispatched(_) => None,
             Finished(FinishedQueryStatus { finished, .. }) => Some(*finished),
@@ -172,8 +178,9 @@ impl QueryStatus {
     }
 
     /// Number of dispatch requests.
+    #[must_use]
     pub fn num_dispatched(&self) -> usize {
-        use QueryStatus::*;
+        use QueryStatus::{Dispatched, Finished, New, PickedUp};
         match self {
             New(_) | PickedUp(_) => 0,
             Dispatched(DispatchedQueryStatus { num_shards, .. })
@@ -182,8 +189,9 @@ impl QueryStatus {
     }
 
     /// Number of dispatch requests that were dropped.
+    #[must_use]
     pub fn num_dropped(&self) -> usize {
-        use QueryStatus::*;
+        use QueryStatus::{Dispatched, Finished, New, PickedUp};
         match self {
             New(_) | PickedUp(_) => 0,
             Dispatched(DispatchedQueryStatus { num_dropped, .. })
@@ -192,11 +200,13 @@ impl QueryStatus {
     }
 
     /// Returns `true` if the query is in state `Finished`.
+    #[must_use]
     pub fn is_finished(&self) -> bool {
         matches!(self, QueryStatus::Finished(_))
     }
 
     /// Records the fact that the query was picked up by a broker at `time`.
+    #[must_use]
     pub fn pick_up(&self, time: Duration) -> Self {
         match self {
             Self::New(entry) => {
@@ -217,6 +227,7 @@ impl QueryStatus {
 
     /// Records the fact that the query was dispatched by a broker at `time` to `num_shards`
     /// shards.
+    #[must_use]
     pub fn dispatch(&self, time: Duration, num_shards: usize) -> Self {
         match self {
             Self::PickedUp(PickedUpQueryStatus { entry, broker }) => {
@@ -249,6 +260,7 @@ impl QueryStatus {
 
     /// Records the fact that a shard have finished processing and sent results back to the
     /// broker by the time `time`.
+    #[must_use]
     pub fn finish_shard(&self, time: Duration) -> Self {
         match self {
             Self::Dispatched(DispatchedQueryStatus {
@@ -290,6 +302,7 @@ impl QueryStatus {
     }
 
     /// Records the fact that a shard request had to be dropped.
+    #[must_use]
     pub fn drop_shard(&self, time: Duration) -> Self {
         match self {
             Self::Dispatched(DispatchedQueryStatus {
@@ -477,7 +490,7 @@ mod test {
     #[test]
     #[should_panic(expected = "Query in invalid state")]
     fn test_query_status_pick_up_again() {
-        QueryStatus::PickedUp(PickedUpQueryStatus {
+        let _ = QueryStatus::PickedUp(PickedUpQueryStatus {
             entry: Duration::new(0, 1),
             broker: Duration::new(0, 2),
         })
@@ -487,7 +500,7 @@ mod test {
     #[test]
     #[should_panic(expected = "Query in invalid state")]
     fn test_query_status_pick_up_dispatched() {
-        QueryStatus::Dispatched(DispatchedQueryStatus {
+        let _ = QueryStatus::Dispatched(DispatchedQueryStatus {
             entry: Duration::new(0, 1),
             broker: Duration::new(0, 2),
             dispatch: Duration::new(0, 3),
@@ -501,7 +514,7 @@ mod test {
     #[test]
     #[should_panic(expected = "Query in invalid state")]
     fn test_query_status_pick_up_finished() {
-        QueryStatus::Finished(FinishedQueryStatus {
+        let _ = QueryStatus::Finished(FinishedQueryStatus {
             entry: Duration::new(0, 1),
             broker: Duration::new(0, 2),
             dispatch: Duration::new(0, 3),
@@ -515,13 +528,13 @@ mod test {
     #[test]
     #[should_panic(expected = "Query in invalid state")]
     fn test_query_status_dispatch_new() {
-        QueryStatus::New(Duration::new(0, 1)).dispatch(Duration::new(0, 2), 3);
+        let _ = QueryStatus::New(Duration::new(0, 1)).dispatch(Duration::new(0, 2), 3);
     }
 
     #[test]
     #[should_panic(expected = "Dispatches must be done in order")]
     fn test_query_status_dispatch_again_out_of_order() {
-        QueryStatus::Dispatched(DispatchedQueryStatus {
+        let _ = QueryStatus::Dispatched(DispatchedQueryStatus {
             entry: Duration::new(0, 1),
             broker: Duration::new(0, 2),
             dispatch: Duration::new(0, 3),
@@ -535,7 +548,7 @@ mod test {
     #[test]
     #[should_panic(expected = "Query in invalid state")]
     fn test_query_status_dispatch_finished() {
-        QueryStatus::Finished(FinishedQueryStatus {
+        let _ = QueryStatus::Finished(FinishedQueryStatus {
             entry: Duration::new(0, 1),
             broker: Duration::new(0, 2),
             dispatch: Duration::new(0, 3),
@@ -549,13 +562,13 @@ mod test {
     #[test]
     #[should_panic(expected = "Query in invalid state")]
     fn test_query_status_finish_new() {
-        QueryStatus::New(Duration::new(0, 1)).finish_shard(Duration::new(0, 2));
+        let _ = QueryStatus::New(Duration::new(0, 1)).finish_shard(Duration::new(0, 2));
     }
 
     #[test]
     #[should_panic(expected = "Query in invalid state")]
     fn test_query_status_finish_picked_up() {
-        QueryStatus::PickedUp(PickedUpQueryStatus {
+        let _ = QueryStatus::PickedUp(PickedUpQueryStatus {
             entry: Duration::new(0, 1),
             broker: Duration::new(0, 2),
         })
@@ -565,7 +578,7 @@ mod test {
     #[test]
     #[should_panic(expected = "Query in invalid state")]
     fn test_query_status_finish_one_too_many_times() {
-        QueryStatus::Finished(FinishedQueryStatus {
+        let _ = QueryStatus::Finished(FinishedQueryStatus {
             entry: Duration::new(0, 1),
             broker: Duration::new(0, 2),
             dispatch: Duration::new(0, 3),
@@ -579,13 +592,13 @@ mod test {
     #[test]
     #[should_panic(expected = "Query in invalid state")]
     fn test_query_status_drop_new() {
-        QueryStatus::New(Duration::new(0, 1)).drop_shard(Duration::new(0, 2));
+        let _ = QueryStatus::New(Duration::new(0, 1)).drop_shard(Duration::new(0, 2));
     }
 
     #[test]
     #[should_panic(expected = "Query in invalid state")]
     fn test_query_status_drop_picked_up() {
-        QueryStatus::PickedUp(PickedUpQueryStatus {
+        let _ = QueryStatus::PickedUp(PickedUpQueryStatus {
             entry: Duration::new(0, 1),
             broker: Duration::new(0, 2),
         })
@@ -595,7 +608,7 @@ mod test {
     #[test]
     #[should_panic(expected = "Query in invalid state")]
     fn test_query_status_drop_one_too_many_times() {
-        QueryStatus::Finished(FinishedQueryStatus {
+        let _ = QueryStatus::Finished(FinishedQueryStatus {
             entry: Duration::new(0, 1),
             broker: Duration::new(0, 2),
             dispatch: Duration::new(0, 3),
@@ -609,13 +622,13 @@ mod test {
     #[test]
     #[should_panic(expected = "Entry time (10ns) must be at or before pick up time (2ns)")]
     fn test_query_status_pick_up_in_past() {
-        QueryStatus::New(Duration::new(0, 10)).pick_up(Duration::new(0, 2));
+        let _ = QueryStatus::New(Duration::new(0, 10)).pick_up(Duration::new(0, 2));
     }
 
     #[test]
     #[should_panic(expected = "Pick-up time (2ns) must be at or before dispatch time (1ns)")]
     fn test_query_status_dispatch_in_past() {
-        QueryStatus::PickedUp(PickedUpQueryStatus {
+        let _ = QueryStatus::PickedUp(PickedUpQueryStatus {
             entry: Duration::new(0, 1),
             broker: Duration::new(0, 2),
         })
@@ -625,7 +638,7 @@ mod test {
     #[test]
     #[should_panic(expected = "Dispatch time (3ns) must be at or before finish time (1ns)")]
     fn test_query_status_finish_shard_in_past() {
-        QueryStatus::Dispatched(DispatchedQueryStatus {
+        let _ = QueryStatus::Dispatched(DispatchedQueryStatus {
             entry: Duration::new(0, 1),
             broker: Duration::new(0, 2),
             dispatch: Duration::new(0, 3),

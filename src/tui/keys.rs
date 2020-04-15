@@ -64,7 +64,7 @@ pub struct KeyBindings {
 
 impl Default for KeyBindings {
     fn default() -> Self {
-        use NavigationAction::*;
+        use NavigationAction::{Down, Enter, Left, Right, Up};
         let navigation_bindings: HashMap<Key, NavigationAction> = [
             (Key::Left, Left),
             (Key::Right, Right),
@@ -167,6 +167,10 @@ impl KeyBindings {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(key)` if `key` is not bound to any action.
     pub fn global_action(&self, key: Key) -> Result<GlobalAction, Key> {
         self.global_bindings.get(&key).copied().ok_or(key)
     }
@@ -189,6 +193,10 @@ impl KeyBindings {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(key)` if `key` is not bound to any action.
     pub fn navigation_action(&self, key: Key) -> Result<NavigationAction, Key> {
         self.navigation_bindings.get(&key).copied().ok_or(key)
     }
@@ -211,6 +219,10 @@ impl KeyBindings {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(key)` if `key` is not bound to any action.
     pub fn active_pane_action(&self, key: Key) -> Result<ActivePaneAction, Key> {
         self.active_pane_bindings.get(&key).copied().ok_or(key)
     }
