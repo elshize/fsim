@@ -45,6 +45,8 @@ indicatif = "0.14"
 nalgebra = "0.20"
 ordered-float = "1.0"
 lp-modeler = "0.4.2"
+indexed_vec = "1.2"
+statrs = "0.12"
 
 [dev-dependencies]
 proptest = "0.9"
