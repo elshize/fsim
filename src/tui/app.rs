@@ -116,12 +116,12 @@ impl View {
     }
 
     pub fn activate(self, snapshot: &Snapshot) -> View {
-        match self {
-            View::Logs(_) => View::Logs(match snapshot.logs.len() {
-                0 => None,
-                len => Some(len - 1),
-            }),
-            _ => self.select(0),
+        if !self.is_list() {
+            return self;
+        }
+        match self.list_length(snapshot) {
+            0 => self,
+            len => self.select(len - 1),
         }
     }
 
@@ -172,6 +172,17 @@ impl View {
             ActiveQueries(QueriesView::List(_))
             | FinishedQueries(QueriesView::List(_))
             | Logs(_) => true,
+            _ => false,
+        }
+    }
+
+    /// Is this a details view.
+    pub fn is_details(self) -> bool {
+        use View::{ActiveQueries, FinishedQueries};
+        match self {
+            ActiveQueries(QueriesView::Details(_)) | FinishedQueries(QueriesView::Details(_)) => {
+                true
+            }
             _ => false,
         }
     }
@@ -394,10 +405,10 @@ impl<'a> App<'a> {
         match bindings.active_pane_action(key) {
             Ok(Back) => Window::Main(
                 view.back(),
-                if view.is_list() {
-                    Mode::Navigation
-                } else {
+                if view.is_details() {
                     Mode::ActivePane
+                } else {
+                    Mode::Navigation
                 },
             ),
             Ok(Maximize) => Window::Maximized(view),

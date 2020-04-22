@@ -83,31 +83,50 @@ fn format_key(key: Key) -> String {
     }
 }
 
+fn print_keybindings(keys: &KeyBindings) -> Result<()> {
+    println!("--- Global ---");
+    for action in GlobalAction::iter() {
+        println!("{:?}", action);
+        for key in keys.global_bindings(action) {
+            println!("\t{}", format_key(key));
+        }
+    }
+    println!("--- Navigation Mode ---");
+    for action in NavigationAction::iter() {
+        println!("{:?}", action);
+        for key in keys.navigation_bindings(action) {
+            println!("\t{}", format_key(key));
+        }
+    }
+    println!("\n--- Active Pane Mode ---");
+    for action in ActivePaneAction::iter() {
+        println!("{:?}", action);
+        for key in keys.active_pane_bindings(action) {
+            println!("\t{}", format_key(key));
+        }
+    }
+    return Ok(());
+}
+
+fn run_ui(
+    config: &Config,
+    queries: Vec<fsim::simulation::config::Query>,
+    log_history_size: usize,
+) -> Result<()> {
+    let app = App::new(Simulation::new(&config, queries)).with_log_history_size(log_history_size);
+    write!(io::stdout().into_raw_mode()?, "{}", termion::clear::All).unwrap();
+    let stdout = io::stdout().into_raw_mode()?;
+    let backend = TermionBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+    terminal.hide_cursor()?;
+    app.event_loop(&KeyBindings::default(), &mut terminal)?;
+    terminal.show_cursor()?;
+    Ok(())
+}
+
 fn run(opt: Opt) -> Result<()> {
     if opt.key_bindings {
-        let keys = KeyBindings::default();
-        println!("--- Global ---");
-        for action in GlobalAction::iter() {
-            println!("{:?}", action);
-            for key in keys.global_bindings(action) {
-                println!("\t{}", format_key(key));
-            }
-        }
-        println!("--- Navigation Mode ---");
-        for action in NavigationAction::iter() {
-            println!("{:?}", action);
-            for key in keys.navigation_bindings(action) {
-                println!("\t{}", format_key(key));
-            }
-        }
-        println!("\n--- Active Pane Mode ---");
-        for action in ActivePaneAction::iter() {
-            println!("{:?}", action);
-            for key in keys.active_pane_bindings(action) {
-                println!("\t{}", format_key(key));
-            }
-        }
-        return Ok(());
+        return print_keybindings(&KeyBindings::default());
     }
 
     fsim::simulation::logger::LoggerBuilder::default()
@@ -120,24 +139,20 @@ fn run(opt: Opt) -> Result<()> {
         })
         .target("fsim")
         .init()?;
+
     let config = Config::from_yaml(File::open(opt.config.unwrap())?)?;
+
     let queries: Result<Vec<fsim::simulation::config::Query>> =
         serde_json::Deserializer::from_reader(Input::new(opt.queries)?.reader())
             .into_iter()
             .map(|elem| elem.context("Failed to parse query"))
             .collect();
-    let app =
-        App::new(Simulation::new(&config, queries?)).with_log_history_size(opt.log_history_size);
 
-    write!(io::stdout().into_raw_mode()?, "{}", termion::clear::All).unwrap();
-
-    let stdout = io::stdout().into_raw_mode()?;
-    let backend = TermionBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-    terminal.hide_cursor()?;
-    app.event_loop(&KeyBindings::default(), &mut terminal)?;
-    terminal.show_cursor()?;
-    Ok(())
+    if opt.no_ui {
+        todo!();
+    } else {
+        run_ui(&config, queries?, opt.log_history_size)
+    }
 }
 
 fn main() {
