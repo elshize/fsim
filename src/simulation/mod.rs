@@ -38,7 +38,7 @@
 //!         .into_iter()
 //!         .map(|elem| elem.context("Failed to parse query"))
 //!         .collect();
-//! let simulation = Simulation::<ReversibleProgression>::new(config, queries?);
+//! let simulation = Simulation::<ReversibleProgression>::new(&config, queries?);
 //! # Ok(())
 //! # }
 //! ```
