@@ -16,6 +16,14 @@ pub struct FlushStatus<W: Write, L: Write> {
     log_sink: L,
 }
 
+impl<W: Write, L: Write> Drop for FlushStatus<W, L> {
+    fn drop(&mut self) {
+        for (query, status) in self.active_queries.iter() {
+            write_query(&mut self.data_sink, *query, *status);
+        }
+    }
+}
+
 impl<W: Write, L: Write> FlushStatus<W, L> {
     /// Constructs a new flushing status with the given sink.
     pub fn new(data_sink: W, log_sink: L) -> Self {
