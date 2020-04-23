@@ -52,10 +52,7 @@ use rand_chacha::ChaChaRng;
 use rand_distr::Normal;
 use serde::{Deserialize, Serialize};
 use std::borrow::BorrowMut;
-use std::cmp::Reverse;
-use std::cmp::{Ord, Ordering, PartialOrd};
-use std::collections::BinaryHeap;
-//use std::ops::Deref;
+use std::cmp::{Ord, PartialOrd, Reverse};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -87,6 +84,12 @@ use shard_selector::ExhaustiveSelector;
 
 pub mod config;
 pub use config::{Config, TimeUnit};
+
+mod event;
+pub use event::Event;
+
+mod scheduler;
+pub use scheduler::Scheduler;
 
 mod im_status;
 pub use im_status::Status as ImStatus;
@@ -188,31 +191,6 @@ pub enum Process {
         /// Stage to enter.
         stage: NodeStage,
     },
-}
-
-/// An event is simply a process to run and a time to run it on.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Event {
-    time: Duration,
-    process: Process,
-}
-
-impl Event {
-    fn new(time: Duration, process: Process) -> Self {
-        Event { time, process }
-    }
-}
-
-impl PartialOrd for Event {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.time.partial_cmp(&other.time)
-    }
-}
-
-impl Ord for Event {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.time.cmp(&other.time)
-    }
 }
 
 /// Request to route a query to a certain node to process a certain shard.
@@ -342,40 +320,6 @@ pub struct Components<'sim> {
     broker: Broker<'sim>,
     /// Shard nodes. Each contains a number of shard replicas.
     nodes: Vec<NodeEntry<'sim>>,
-}
-
-/// Event scheduler. Stores any future events in a priority queue.
-pub struct Scheduler {
-    /// Queue of the future events that will be processed in order of time.
-    scheduled_events: BinaryHeap<Reverse<Event>>,
-}
-
-impl Default for Scheduler {
-    fn default() -> Self {
-        Self {
-            scheduled_events: BinaryHeap::new(),
-        }
-    }
-}
-
-impl Scheduler {
-    /// Schedule `process` to be executed at `time`.
-    pub fn schedule(&mut self, time: Duration, process: Process) {
-        self.scheduled_events
-            .push(Reverse(Event::new(time, process)));
-    }
-    /// Returns the number of events in the queue.
-    pub fn len(&self) -> usize {
-        self.scheduled_events.len()
-    }
-    /// Answers whether the event queue is empty.
-    pub fn is_empty(&self) -> bool {
-        self.scheduled_events.is_empty()
-    }
-    /// Returns, and removes from the queue, the next event to be processed.
-    pub fn pop(&mut self) -> Option<Reverse<Event>> {
-        self.scheduled_events.pop()
-    }
 }
 
 /// The result of running simulation for a number of steps or a given interval of time.
