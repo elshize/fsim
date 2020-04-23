@@ -116,12 +116,12 @@ impl View {
     }
 
     pub fn activate(self, snapshot: &Snapshot) -> View {
-        match self {
-            View::Logs(_) => View::Logs(match snapshot.logs.len() {
-                0 => None,
-                len => Some(len - 1),
-            }),
-            _ => self.select(0),
+        if !self.is_list() {
+            return self;
+        }
+        match self.list_length(snapshot) {
+            0 => self,
+            len => self.select(len - 1),
         }
     }
 
@@ -137,12 +137,12 @@ impl View {
     }
 
     /// Selects an item.
-    pub fn frame_height(self, app: &App) -> u16 {
+    pub fn frame_height(self, app: &App<'_>) -> u16 {
         app.frame_height(self)
     }
 
     /// Selects an item.
-    pub fn move_selection(self, direction: VerticalDirection, app: &App) -> View {
+    pub fn move_selection(self, direction: VerticalDirection, app: &App<'_>) -> View {
         if let Some(selected) = self.selected() {
             if let Some(last) = self.list_length(&app.snapshot).checked_sub(1) {
                 match direction {
@@ -172,6 +172,17 @@ impl View {
             ActiveQueries(QueriesView::List(_))
             | FinishedQueries(QueriesView::List(_))
             | Logs(_) => true,
+            _ => false,
+        }
+    }
+
+    /// Is this a details view.
+    pub fn is_details(self) -> bool {
+        use View::{ActiveQueries, FinishedQueries};
+        match self {
+            ActiveQueries(QueriesView::Details(_)) | FinishedQueries(QueriesView::Details(_)) => {
+                true
+            }
             _ => false,
         }
     }
@@ -281,17 +292,17 @@ impl Frames {
 }
 
 /// TUI application.
-pub struct App<'a> {
-    pub(crate) sim: Simulation<'a, ReversibleProgression>,
+pub struct App<'sim> {
+    pub(crate) sim: Simulation<'sim, ReversibleProgression>,
     pub(crate) snapshot: Snapshot,
     pub(crate) window: Window,
     pub(crate) frames: Frames,
     log_history_size: usize,
 }
 
-impl<'a> App<'a> {
+impl<'sim> App<'sim> {
     /// Constructs new application with the given simulation.
-    pub fn new(sim: Simulation<'a, ReversibleProgression>) -> Self {
+    pub fn new(sim: Simulation<'sim, ReversibleProgression>) -> Self {
         Self {
             sim,
             snapshot: Snapshot::default(),
@@ -323,9 +334,9 @@ impl<'a> App<'a> {
     }
 
     fn queries_snapshot<'q>(
-        queries: impl Iterator<Item = &'q (Query, QueryStatus)>,
+        queries: impl Iterator<Item = (Query, QueryStatus)>,
     ) -> Vec<(Query, QueryStatus)> {
-        let mut queries: Vec<_> = queries.copied().collect();
+        let mut queries: Vec<_> = queries.collect();
         queries.sort_by_key(|(q, _)| *q);
         queries
     }
@@ -394,10 +405,10 @@ impl<'a> App<'a> {
         match bindings.active_pane_action(key) {
             Ok(Back) => Window::Main(
                 view.back(),
-                if view.is_list() {
-                    Mode::Navigation
-                } else {
+                if view.is_details() {
                     Mode::ActivePane
+                } else {
+                    Mode::Navigation
                 },
             ),
             Ok(Maximize) => Window::Maximized(view),
@@ -554,6 +565,7 @@ mod test {
                     .into_iter()
                     .map(|elem| elem.expect("Failed to parse query"))
                     .collect(),
+                ReversibleProgression::default(),
             );
             let mut app = App::new(sim);
             assert_eq!(app.sim.step(), 1);

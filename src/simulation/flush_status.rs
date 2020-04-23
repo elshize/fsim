@@ -1,42 +1,49 @@
-use crate::simulation::{Query, QueryStatus};
-use im_rc::{HashMap, Vector};
+use crate::simulation::{Query, QueryStatus, Status};
+use serde_json::{json, to_writer};
+use std::collections::HashMap;
+use std::io::Write;
 use std::time::Duration;
 
 #[derive(Clone)]
-/// Immutable version of `Status`.
-pub struct Status {
+/// Implementation of [`Status`](../trait.Status.html) that flushes data:
+/// It **does not** preserve history.
+pub struct FlushStatus<W: Write, L: Write> {
     time: Duration,
     queries_incomplete: usize,
     active_queries: HashMap<Query, QueryStatus>,
-    past_queries: HashMap<Query, QueryStatus>,
-    logs: Vector<String>,
+    num_finished: usize,
+    data_sink: W,
+    log_sink: L,
 }
 
-impl Status {
-    /// Iterates over log events.
-    pub fn logs<'a>(&'a self) -> Box<dyn DoubleEndedIterator<Item = &'a String> + 'a> {
-        Box::new(self.logs.iter())
-    }
-
-    /// Iterates over finished queries.
-    pub fn finished<'a>(&'a self) -> Box<dyn Iterator<Item = (Query, QueryStatus)> + 'a> {
-        Box::new(self.past_queries.iter().copied())
+impl<W: Write, L: Write> FlushStatus<W, L> {
+    /// Constructs a new flushing status with the given sink.
+    pub fn new(data_sink: W, log_sink: L) -> Self {
+        Self {
+            time: Duration::new(0, 0),
+            queries_incomplete: 0,
+            active_queries: HashMap::new(),
+            num_finished: 0,
+            data_sink,
+            log_sink,
+        }
     }
 }
 
-impl Default for Status {
+impl Default for FlushStatus<std::io::Stdout, std::io::Stderr> {
     fn default() -> Self {
         Self {
             time: Duration::new(0, 0),
             queries_incomplete: 0,
             active_queries: HashMap::new(),
-            past_queries: HashMap::new(),
-            logs: Vector::new(),
+            num_finished: 0,
+            data_sink: std::io::stdout(),
+            log_sink: std::io::stderr(),
         }
     }
 }
 
-impl crate::simulation::Status for Status {
+impl<W: Write, L: Write> Status for FlushStatus<W, L> {
     fn time(&self) -> Duration {
         self.time
     }
@@ -46,7 +53,7 @@ impl crate::simulation::Status for Status {
     }
 
     fn queries_finished(&self) -> usize {
-        self.past_queries.len()
+        self.num_finished
     }
 
     fn queries_active(&self) -> usize {
@@ -58,7 +65,7 @@ impl crate::simulation::Status for Status {
     }
 
     fn active<'a>(&'a self) -> Box<dyn Iterator<Item = (Query, QueryStatus)> + 'a> {
-        Box::new(self.active_queries.iter().copied())
+        Box::new(self.active_queries.iter().map(|(q, s)| (*q, *s)))
     }
 
     fn active_query(&self, query: &Query) -> &QueryStatus {
@@ -88,7 +95,8 @@ impl crate::simulation::Status for Status {
             s if s.is_finished() => {
                 self.queries_incomplete += if s.num_dropped() > 0 { 1 } else { 0 };
                 self.active_queries.remove(&query);
-                self.past_queries.insert(query, s);
+                self.num_finished += 1;
+                write_query(&mut self.data_sink, query, s);
             }
             s => {
                 self.active_queries.entry(query).and_modify(|old| *old = s);
@@ -101,7 +109,8 @@ impl crate::simulation::Status for Status {
             s if s.is_finished() => {
                 self.queries_incomplete += 1;
                 self.active_queries.remove(&query);
-                self.past_queries.insert(query, s);
+                self.num_finished += 1;
+                write_query(&mut self.data_sink, query, s);
             }
             s => {
                 self.active_queries.entry(query).and_modify(|old| *old = s);
@@ -113,7 +122,9 @@ impl crate::simulation::Status for Status {
     where
         E: Iterator<Item = String>,
     {
-        self.logs.extend(events);
+        for event in events {
+            writeln!(self.data_sink, "{}", event).expect("Unable to write logs");
+        }
     }
 
     fn update_time(&mut self, time: Duration) {
@@ -121,23 +132,35 @@ impl crate::simulation::Status for Status {
     }
 }
 
+fn write_query<W: Write>(mut sink: &mut W, query: Query, status: QueryStatus) {
+    to_writer(
+        &mut sink,
+        &json! ({
+            "query_id": query.id,
+            "request_id": query.request,
+            "status": status,
+        }),
+    )
+    .expect("Unable to write query status");
+    writeln!(sink).expect("Unable to write query status");
+}
+
 #[cfg(test)]
 mod test {
+    use super::*;
     use crate::simulation::{Query, QueryStatus, Status};
     use crate::simulation::{QueryId, RequestId};
-    use im_rc::hashmap;
     use std::time::Duration;
 
     #[test]
     fn test_default() {
-        let status = super::Status::default();
+        let status = FlushStatus::default();
         assert_eq!(status.time(), Duration::new(0, 0));
         assert_eq!(status.queries_entered(), 0);
         assert_eq!(status.queries_finished(), 0);
         assert_eq!(status.queries_active(), 0);
         assert_eq!(status.queries_incomplete(), 0);
         assert_eq!(status.queries_incomplete(), 0);
-        assert!(status.logs().collect::<Vec<_>>().is_empty());
     }
 
     fn secs(secs: u64) -> Duration {
@@ -148,37 +171,44 @@ mod test {
     fn test_pipeline() {
         let q1 = Query::new(QueryId(1), RequestId(11));
         let q2 = Query::new(QueryId(10), RequestId(13));
-        let mut status = super::Status::default();
+        let mut status = FlushStatus::default();
         status.enter_query(q1, secs(1));
         assert_eq!(status.queries_entered(), 1);
         status.enter_query(q2, secs(2));
         assert_eq!(status.queries_entered(), 2);
         assert_eq!(
-            status.active_queries,
-            hashmap! {
-                q1 => QueryStatus::new(secs(1)),
-                q2 => QueryStatus::new(secs(2))
-            }
+            status.active_queries.iter().collect::<Vec<_>>(),
+            vec![
+                (&q1, &QueryStatus::new(secs(1))),
+                (&q2, &QueryStatus::new(secs(2)))
+            ]
         );
         status.pick_up_query(q1, secs(3));
         assert_eq!(status.queries_entered(), 2);
         assert_eq!(
             status.active_queries,
-            hashmap! {
-                q1 => QueryStatus::new(secs(1)).pick_up(secs(3)),
-                q2 => QueryStatus::new(secs(2))
-            }
+            vec![
+                (q1, QueryStatus::new(secs(1)).pick_up(secs(3))),
+                (q2, QueryStatus::new(secs(2)))
+            ]
+            .into_iter()
+            .collect::<HashMap<_, _>>()
         );
         status.dispatch_query(q1, secs(3), 2);
         assert_eq!(status.queries_entered(), 2);
         assert_eq!(
             status.active_queries,
-            hashmap! {
-                q1 => QueryStatus::new(secs(1))
-                    .pick_up(secs(3))
-                    .dispatch(secs(3), 2),
-                q2 => QueryStatus::new(secs(2))
-            }
+            vec![
+                (
+                    q1,
+                    QueryStatus::new(secs(1))
+                        .pick_up(secs(3))
+                        .dispatch(secs(3), 2)
+                ),
+                (q2, QueryStatus::new(secs(2)))
+            ]
+            .into_iter()
+            .collect::<HashMap<_, _>>()
         );
         status.finish_shard(q1, secs(4));
         status.drop_shard(q1, secs(5));
@@ -187,19 +217,12 @@ mod test {
         assert_eq!(status.queries_finished(), 1);
         assert_eq!(status.queries_incomplete(), 1);
         assert_eq!(
-            status.active().collect::<im_rc::HashMap<_, _>>(),
-            hashmap![q2 => QueryStatus::new(secs(2))]
+            status.active().collect::<HashMap<_, _>>(),
+            vec![(q2, QueryStatus::new(secs(2)))]
+                .into_iter()
+                .collect::<HashMap<_, _>>()
         );
-        assert_eq!(
-            status.past_queries,
-            hashmap! {
-                q1 => QueryStatus::new(secs(1))
-                    .pick_up(secs(3))
-                    .dispatch(secs(3), 2)
-                    .finish_shard(secs(4))
-                    .drop_shard(secs(5))
-            }
-        );
+        assert_eq!(status.num_finished, 1);
         status.pick_up_query(q2, secs(5));
         status.dispatch_query(q2, secs(6), 2);
         status.finish_shard(q2, secs(7));
@@ -209,35 +232,6 @@ mod test {
         assert_eq!(status.queries_finished(), 2);
         assert_eq!(status.queries_incomplete(), 1);
         assert!(status.active_queries.is_empty());
-        assert_eq!(
-            status.past_queries,
-            hashmap! {
-                q1 => QueryStatus::new(secs(1))
-                    .pick_up(secs(3))
-                    .dispatch(secs(3), 2)
-                    .finish_shard(secs(4))
-                    .drop_shard(secs(5)),
-                q2 => QueryStatus::new(secs(2))
-                    .pick_up(secs(5))
-                    .dispatch(secs(6), 2)
-                    .finish_shard(secs(7))
-                    .finish_shard(secs(8))
-            }
-        );
-        status.log_events(vec![String::from("Log1"), String::from("Log2")].into_iter());
-        assert_eq!(
-            status.logs().cloned().collect::<Vec<_>>(),
-            vec![String::from("Log1"), String::from("Log2")]
-        );
-        status.log_events(vec![String::from("Log3"), String::from("Log4")].into_iter());
-        assert_eq!(
-            status.logs().cloned().collect::<Vec<_>>(),
-            vec![
-                String::from("Log1"),
-                String::from("Log2"),
-                String::from("Log3"),
-                String::from("Log4"),
-            ]
-        );
+        assert_eq!(status.num_finished, 2);
     }
 }

@@ -15,9 +15,9 @@ fn format_query((query, status): &(Query, QueryStatus)) -> String {
 }
 
 fn render_query_list<'a, B: Backend>(
-    frame: &mut Frame<B>,
+    frame: &mut Frame<'_, B>,
     rect: Rect,
-    block: Block,
+    block: Block<'_>,
     queries: &'a [(Query, QueryStatus)],
     selected: Option<usize>,
 ) {
@@ -32,9 +32,9 @@ fn render_query_list<'a, B: Backend>(
 }
 
 fn render_query_details<'a, B: Backend>(
-    frame: &mut Frame<B>,
+    frame: &mut Frame<'_, B>,
     rect: Rect,
-    block: Block,
+    block: Block<'_>,
     queries: &'a [(Query, QueryStatus)],
     selected: usize,
 ) {
@@ -48,9 +48,9 @@ fn render_query_details<'a, B: Backend>(
 }
 
 fn render_logs<'a, B: Backend>(
-    frame: &mut Frame<B>,
+    frame: &mut Frame<'_, B>,
     rect: Rect,
-    block: Block,
+    block: Block<'_>,
     logs: impl Iterator<Item = &'a String>,
     selected: Option<usize>,
 ) {
@@ -65,9 +65,9 @@ fn render_logs<'a, B: Backend>(
 }
 
 fn render_stats<B: Backend>(
-    frame: &mut Frame<B>,
+    frame: &mut Frame<'_, B>,
     rect: Rect,
-    block: Block,
+    block: Block<'_>,
     step: usize,
     status: &ImStatus,
 ) {
@@ -108,7 +108,7 @@ fn render_stats<B: Backend>(
     frame.render(&mut table, rect);
 }
 
-fn block(title: &str, mode: Option<Mode>) -> Block {
+fn block(title: &str, mode: Option<Mode>) -> Block<'_> {
     let block = Block::default().title(title).borders(Borders::ALL);
     match mode {
         Some(Mode::ActivePane) => block
@@ -121,10 +121,10 @@ fn block(title: &str, mode: Option<Mode>) -> Block {
     }
 }
 
-impl<'a> App<'a> {
+impl<'sim> App<'sim> {
     fn draw_view<B: Backend>(
         &self,
-        frame: &mut Frame<B>,
+        frame: &mut Frame<'_, B>,
         view: View,
         rect: Rect,
         mode: Option<Mode>,
@@ -192,7 +192,7 @@ impl<'a> App<'a> {
     }
 
     /// Draw application window.
-    pub fn draw<B: Backend>(&mut self, frame: &mut Frame<B>) {
+    pub fn draw<B: Backend>(&mut self, frame: &mut Frame<'_, B>) {
         self.frames.clear();
         match self.window {
             Window::Maximized(view) => {

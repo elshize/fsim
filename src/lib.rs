@@ -2,6 +2,7 @@
 
 #![warn(
     missing_docs,
+    rust_2018_idioms,
     trivial_casts,
     trivial_numeric_casts,
     unused_import_braces,
