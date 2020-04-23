@@ -11,7 +11,7 @@
 #![allow(clippy::module_name_repetitions, clippy::default_trait_access)]
 
 use anyhow::{Context, Result};
-use fsim::simulation::{config::Config, Simulation};
+use fsim::simulation::{config::Config, FlushingProgression, ReversibleProgression, Simulation};
 use fsim::tui::{ActivePaneAction, App, GlobalAction, KeyBindings, NavigationAction};
 use std::fs::File;
 use std::io;
@@ -56,8 +56,12 @@ struct Opt {
     log_history_size: usize,
 
     /// Only run simulation for a given time and reports the data.
-    #[structopt(long)]
+    #[structopt(long, requires = "time")]
     no_ui: bool,
+
+    /// Running time of the simulation in units defined in the config.
+    #[structopt(long)]
+    time: Option<u64>,
 }
 
 struct Input<'a>(Box<dyn BufRead + 'a>);
@@ -108,12 +112,35 @@ fn print_keybindings(keys: &KeyBindings) -> Result<()> {
     return Ok(());
 }
 
+fn run_no_ui(
+    config: &Config,
+    queries: Vec<fsim::simulation::config::Query>,
+    time: u64,
+) -> Result<()> {
+    let stdout = io::stdout();
+    let stderr = io::stderr();
+    let mut sim = Simulation::new(
+        &config,
+        queries,
+        FlushingProgression::new(stdout.lock(), stderr.lock()),
+    );
+    let length = sim.duration(time);
+    println!("{:?}", length);
+    sim.run_until(length);
+    Ok(())
+}
+
 fn run_ui(
     config: &Config,
     queries: Vec<fsim::simulation::config::Query>,
     log_history_size: usize,
 ) -> Result<()> {
-    let app = App::new(Simulation::new(&config, queries)).with_log_history_size(log_history_size);
+    let app = App::new(Simulation::new(
+        &config,
+        queries,
+        ReversibleProgression::default(),
+    ))
+    .with_log_history_size(log_history_size);
     write!(io::stdout().into_raw_mode()?, "{}", termion::clear::All).unwrap();
     let stdout = io::stdout().into_raw_mode()?;
     let backend = TermionBackend::new(stdout);
@@ -149,7 +176,7 @@ fn run(opt: Opt) -> Result<()> {
             .collect();
 
     if opt.no_ui {
-        todo!();
+        run_no_ui(&config, queries?, opt.time.unwrap())
     } else {
         run_ui(&config, queries?, opt.log_history_size)
     }

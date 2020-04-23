@@ -38,7 +38,7 @@
 //!         .into_iter()
 //!         .map(|elem| elem.context("Failed to parse query"))
 //!         .collect();
-//! let simulation = Simulation::<ReversibleProgression>::new(&config, queries?);
+//! let simulation = Simulation::new(&config, queries?, ReversibleProgression::default());
 //! # Ok(())
 //! # }
 //! ```
@@ -51,9 +51,11 @@ use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaChaRng;
 use rand_distr::Normal;
 use serde::{Deserialize, Serialize};
+use std::borrow::BorrowMut;
 use std::cmp::Reverse;
 use std::cmp::{Ord, Ordering, PartialOrd};
 use std::collections::BinaryHeap;
+//use std::ops::Deref;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -89,10 +91,13 @@ pub use config::{Config, TimeUnit};
 mod im_status;
 pub use im_status::Status as ImStatus;
 
+mod flush_status;
+pub use flush_status::FlushStatus;
+
 pub mod logger;
 
 mod progression;
-pub use progression::{Progression, ReversibleProgression};
+pub use progression::{FlushingProgression, Progression, ReversibleProgression};
 
 /// A snapshot of a simulation at a specific time.
 pub trait Status {
@@ -113,10 +118,7 @@ pub trait Status {
     fn queries_incomplete(&self) -> usize;
 
     /// Iterates over active queries.
-    fn active<'a>(&'a self) -> Box<dyn Iterator<Item = &'a (Query, QueryStatus)> + 'a>;
-
-    /// Iterates over finished queries.
-    fn finished<'a>(&'a self) -> Box<dyn Iterator<Item = &'a (Query, QueryStatus)> + 'a>;
+    fn active<'a>(&'a self) -> Box<dyn Iterator<Item = (Query, QueryStatus)> + 'a>;
 
     /// Get active query identified by `query`.
     fn active_query(&self, query: &Query) -> &QueryStatus;
@@ -136,13 +138,13 @@ pub trait Status {
     /// Records a dropped shard request.
     fn drop_shard(&mut self, query: Query, time: Duration);
 
-    /// Iterates over log events.
-    fn logs<'a>(&'a self) -> Box<dyn DoubleEndedIterator<Item = &'a String> + 'a>;
-
     /// Add logged events.
     fn log_events<E>(&mut self, events: E)
     where
         E: Iterator<Item = String>;
+
+    /// Updates the current simulation time.
+    fn update_time(&mut self, time: Duration);
 }
 
 const EPSILON: Duration = Duration::from_nanos(1);
@@ -279,17 +281,17 @@ pub enum Effect<'a> {
 }
 
 macro_rules! push_query {
-    ($s:expr, $time:expr, $queue:expr, $query:expr, $process:expr) => {
+    ($scheduler:expr, $time:expr, $queue:expr, $query:expr, $process:expr) => {
         if let PushResult::Pushed { resumed } = $queue.push($query, $process) {
             for process in resumed {
-                $s.schedule($time, process);
+                $scheduler.schedule($time, process);
             }
         }
     };
-    ($s:expr, $time:expr, $queue:expr, $query:expr) => {
+    ($scheduler:expr, $time:expr, $queue:expr, $query:expr) => {
         if let PushResult::Pushed { resumed } = $queue.push_or_drop($query) {
             for process in resumed {
-                $s.schedule($time, process);
+                $scheduler.schedule($time, process);
             }
             true
         } else {
@@ -299,11 +301,11 @@ macro_rules! push_query {
 }
 
 macro_rules! pop_query {
-    ($s:expr, $time:expr, $queue:expr, $callback:expr) => {
+    ($scheduler:expr, $time:expr, $queue:expr, $callback:expr) => {
         if let PopResult::Popped { process, resumed } = $queue.pop($callback) {
-            $s.schedule($time, process);
+            $scheduler.schedule($time, process);
             if let Some(resumed) = resumed {
-                $s.schedule($time, resumed);
+                $scheduler.schedule($time, resumed);
             }
         }
     };
@@ -322,23 +324,62 @@ type DefaultQueryGenerator<'a> =
     QueryGenerator<'a, Normal<f32>, Uniform<usize>, Box<dyn Fn(u64) -> Duration>>;
 
 /// The simulation.
-pub struct Simulation<'a, P> {
-    /// Queue of the future events that will be processed in order of time.
-    scheduled_events: BinaryHeap<Reverse<Event>>,
-
-    incoming_queries: Queue<'a, Query, Process>,
-
-    /// Nodes. Each contains a number of shard replicas.
-    nodes: Vec<NodeEntry<'a>>,
-
-    query_generator: DefaultQueryGenerator<'a>,
-    broker: Broker<'a>,
+pub struct Simulation<'sim, P> {
+    scheduler: Scheduler,
+    components: Components<'sim>,
     query_data: Rc<Vec<config::Query>>,
     time_unit: TimeUnit,
     progression: P,
 }
 
+/// Components that are parts of the simulation.
+pub struct Components<'sim> {
+    /// A component sending queries to the system.
+    query_generator: DefaultQueryGenerator<'sim>,
+    /// A global queue of queries coming to the system.
+    incoming_queries: Queue<'sim, Query, Process>,
+    /// A broker, which receives query requests, dispatches to nodes, and collects the results.
+    broker: Broker<'sim>,
+    /// Shard nodes. Each contains a number of shard replicas.
+    nodes: Vec<NodeEntry<'sim>>,
+}
+
+/// Event scheduler. Stores any future events in a priority queue.
+pub struct Scheduler {
+    /// Queue of the future events that will be processed in order of time.
+    scheduled_events: BinaryHeap<Reverse<Event>>,
+}
+
+impl Default for Scheduler {
+    fn default() -> Self {
+        Self {
+            scheduled_events: BinaryHeap::new(),
+        }
+    }
+}
+
+impl Scheduler {
+    /// Schedule `process` to be executed at `time`.
+    pub fn schedule(&mut self, time: Duration, process: Process) {
+        self.scheduled_events
+            .push(Reverse(Event::new(time, process)));
+    }
+    /// Returns the number of events in the queue.
+    pub fn len(&self) -> usize {
+        self.scheduled_events.len()
+    }
+    /// Answers whether the event queue is empty.
+    pub fn is_empty(&self) -> bool {
+        self.scheduled_events.is_empty()
+    }
+    /// Returns, and removes from the queue, the next event to be processed.
+    pub fn pop(&mut self) -> Option<Reverse<Event>> {
+        self.scheduled_events.pop()
+    }
+}
+
 /// The result of running simulation for a number of steps or a given interval of time.
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum RunResult {
     /// The requested execution has finished.
     Complete,
@@ -346,38 +387,51 @@ pub enum RunResult {
     Incomplete,
 }
 
-impl<'a, P: Progression> Simulation<'a, P> {
+impl RunResult {
+    /// Return self if complete, or invoke the closure.
+    pub fn complete_or_else<F: FnOnce() -> Self>(self, f: F) -> Self {
+        if self == RunResult::Incomplete {
+            f()
+        } else {
+            self
+        }
+    }
+}
+
+impl<'sim, P: Progression> Simulation<'sim, P> {
     /// Constructs a new routing simulation from a config and input queries.
     #[must_use]
-    pub fn new(config: &Config, queries: Vec<config::Query>) -> Self {
+    pub fn new(config: &Config, queries: Vec<config::Query>, progression: P) -> Self {
         let query_selection_dist = Uniform::from(0..queries.len());
         let mut seeder = config
             .seed
             .map_or_else(ChaChaRng::from_entropy, ChaChaRng::seed_from_u64);
         let mut sim = Self {
-            incoming_queries: Default::default(),
-            scheduled_events: BinaryHeap::new(),
-            nodes: vec![],
-            query_generator: QueryGenerator::new(
-                (0..queries.len()).map(QueryId::from).collect(),
-                ChaChaRng::seed_from_u64(seeder.next_u64()),
-                Normal::new(
-                    config.query_distribution.mean,
-                    config.query_distribution.std,
-                )
-                .unwrap(),
-                query_selection_dist,
-                duration_constructor(config.time_unit),
-            ),
-            broker: Broker::new(
-                ExhaustiveSelector::new(config.assignment.num_shards()),
-                RoutingMatrixBuilder::new(config.assignment.weights_by_shard())
-                    .rng(ChaChaRng::seed_from_u64(seeder.next_u64()))
-                    .build(),
-            ),
+            scheduler: Scheduler::default(),
+            components: Components {
+                incoming_queries: Default::default(),
+                nodes: vec![],
+                query_generator: QueryGenerator::new(
+                    (0..queries.len()).map(QueryId::from).collect(),
+                    ChaChaRng::seed_from_u64(seeder.next_u64()),
+                    Normal::new(
+                        config.query_distribution.mean,
+                        config.query_distribution.std,
+                    )
+                    .unwrap(),
+                    query_selection_dist,
+                    duration_constructor(config.time_unit),
+                ),
+                broker: Broker::new(
+                    ExhaustiveSelector::new(config.assignment.num_shards()),
+                    RoutingMatrixBuilder::new(config.assignment.weights_by_shard())
+                        .rng(ChaChaRng::seed_from_u64(seeder.next_u64()))
+                        .build(),
+                ),
+            },
             query_data: Rc::from(queries),
             time_unit: config.time_unit,
-            progression: P::default(),
+            progression,
         };
         let nodes = sim.set_up_nodes(&config);
         let time = Duration::from_nanos(0);
@@ -398,11 +452,11 @@ impl<'a, P: Progression> Simulation<'a, P> {
         }
         sim.schedule(time, Process::QueryGenerator(QueryGeneratorStage::Generate));
         sim.schedule(time, Process::Broker(BrokerStage::RequestQuery));
-        sim.nodes = nodes;
+        sim.components.nodes = nodes;
         sim
     }
 
-    fn set_up_nodes(&self, config: &Config) -> Vec<NodeEntry<'a>> {
+    fn set_up_nodes(&self, config: &Config) -> Vec<NodeEntry<'sim>> {
         (0..config.assignment.num_nodes())
             .map(|id| NodeEntry {
                 node: Node {
@@ -466,20 +520,20 @@ impl<'a, P: Progression> Simulation<'a, P> {
     }
 
     pub(crate) fn run_process(
-        &self,
+        components: &Components<'sim>,
         time: Duration,
         process: Process,
         status: &mut P::Status,
-    ) -> Effect<'a> {
+    ) -> Effect<'sim> {
         match process {
-            Process::QueryGenerator(stage) => self.query_generator.run(stage),
+            Process::QueryGenerator(stage) => components.query_generator.run(stage),
             Process::Broker(stage) => {
                 if let BrokerStage::Select(query) = stage {
                     status.pick_up_query(query, time);
                 }
-                self.broker.run(stage)
+                components.broker.run(stage)
             }
-            Process::Node { id, stage } => self
+            Process::Node { id, stage } => components
                 .nodes
                 .get(usize::from(id))
                 .expect("Node ID out of bounds")
@@ -489,9 +543,10 @@ impl<'a, P: Progression> Simulation<'a, P> {
     }
 
     pub(crate) fn handle_effect(
-        &mut self,
+        scheduler: &mut Scheduler,
+        components: &mut Components<'sim>,
         time: Duration,
-        effect: Effect<'a>,
+        effect: Effect<'sim>,
         status: &mut P::Status,
     ) {
         use Effect::{
@@ -500,31 +555,31 @@ impl<'a, P: Progression> Simulation<'a, P> {
         };
         match effect {
             Schedule(event) => {
-                self.schedule(time + event.time, event.process);
+                scheduler.schedule(time + event.time, event.process);
             }
             ScheduleMany(events) => {
                 for event in events {
-                    self.schedule(time + event.time, event.process);
+                    scheduler.schedule(time + event.time, event.process);
                 }
             }
             QueryQueuePut(query, process) => {
-                push_query!(self, time, self.incoming_queries, query, process);
+                push_query!(scheduler, time, components.incoming_queries, query, process);
                 log::debug!("[{:?}] [{}] Enters incoming queue", time, query);
                 status.enter_query(query, time);
             }
             QueryQueueGet(callback) => {
-                pop_query!(self, time, self.incoming_queries, callback);
+                pop_query!(scheduler, time, components.incoming_queries, callback);
             }
             Route {
                 timeout,
                 query,
                 nodes,
             } => {
-                self.schedule(
+                scheduler.schedule(
                     time + timeout + EPSILON,
                     Process::Broker(BrokerStage::RequestQuery),
                 );
-                self.schedule(
+                scheduler.schedule(
                     time + timeout,
                     Process::Broker(BrokerStage::Dispatch { nodes, query }),
                 );
@@ -532,21 +587,22 @@ impl<'a, P: Progression> Simulation<'a, P> {
             Dispatch { nodes, query } => {
                 status.dispatch_query(query, time, nodes.len());
                 for node in nodes {
-                    let queue = &mut self
+                    let queue = &mut components
                         .nodes
                         .get_mut(usize::from(node.id))
                         .expect("Node ID out of bounds")
                         .entry_queue;
-                    if !push_query!(self, time, queue, (query, node.shard)) {
+                    if !push_query!(scheduler, time, queue, (query, node.shard)) {
                         status.drop_shard(query, time);
                     }
                 }
             }
             NodeQueryGet { node, callback } => {
                 pop_query!(
-                    self,
+                    scheduler,
                     time,
-                    self.nodes
+                    components
+                        .nodes
                         .get_mut(usize::from(node))
                         .expect("Node ID out of bounds")
                         .entry_queue,
@@ -558,7 +614,7 @@ impl<'a, P: Progression> Simulation<'a, P> {
                 query,
                 node,
             } => {
-                self.schedule(
+                scheduler.schedule(
                     time + timeout,
                     Process::Node {
                         id: node,
@@ -588,38 +644,48 @@ impl<'a, P: Progression> Simulation<'a, P> {
     /// It returns `Incomplete` if no more events are scheduled.
     /// See [`RunResult`](enum.RunResult.html).
     pub fn advance(&mut self) -> RunResult {
-        if self.progression.next().is_ok() {
-            return RunResult::Complete;
-        }
-        if let Some(Reverse(Event { time, process })) = self.scheduled_events.pop() {
-            self.assert_time(&time, &process);
-            Self::log_event(time, &process);
-            let status = self.progression.init_step();
-            let effect = self.run_process(time, process, &mut status.borrow_mut());
-            self.handle_effect(time, effect, &mut status.borrow_mut());
-            status.borrow_mut().log_events(
-                logger::clear()
-                    .expect("Unable to retrieve logs")
-                    .into_iter(),
-            );
-            self.progression.record(status.into_inner());
-            RunResult::Complete
-        } else {
-            RunResult::Incomplete
-        }
+        self.progression.next().complete_or_else(|| {
+            if let Some(Reverse(Event { time, process })) = self.scheduler.pop() {
+                self.assert_time(&time, &process);
+                Self::log_event(time, &process);
+                let status = self.progression.status_mut();
+                status.update_time(time);
+                let effect =
+                    Self::run_process(&self.components, time, process, &mut status.borrow_mut());
+                Self::handle_effect(
+                    &mut self.scheduler,
+                    &mut self.components,
+                    time,
+                    effect,
+                    &mut status.borrow_mut(),
+                );
+                status.borrow_mut().log_events(
+                    logger::clear()
+                        .expect("Unable to retrieve logs")
+                        .into_iter(),
+                );
+                RunResult::Complete
+            } else {
+                RunResult::Incomplete
+            }
+        })
     }
 
     /// Schedules `process` to be executed at `time`.
     pub fn schedule(&mut self, time: Duration, process: Process) {
-        self.scheduled_events
-            .push(Reverse(Event::new(time, process)));
+        self.scheduler.schedule(time, process);
     }
 
     /// Run the simulation indefinitely. It will only stop if there are no more events scheduled.
     pub fn run(&mut self) {
-        while !self.scheduled_events.is_empty() {
+        while !self.scheduler.is_empty() {
             self.advance();
         }
+    }
+
+    /// Converts time ticks to duration according to the configured time units.
+    pub fn duration(&self, time: u64) -> Duration {
+        duration_constructor(self.time_unit)(time)
     }
 
     /// Run simulation for a given time interval.
@@ -627,7 +693,7 @@ impl<'a, P: Progression> Simulation<'a, P> {
     /// The results describes whether or not the requested interval has passed.
     /// See [`RunResult`](enum.RunResult.html).
     pub fn run_until(&mut self, time: Duration) -> RunResult {
-        while !self.scheduled_events.is_empty() && self.status().time() < time {
+        while !self.scheduler.is_empty() && self.status().time() < time {
             self.advance();
         }
         if self.status().time() < time {
@@ -643,7 +709,7 @@ impl<'a, P: Progression> Simulation<'a, P> {
     /// See [`RunResult`](enum.RunResult.html).
     pub fn run_steps(&mut self, steps: usize) -> RunResult {
         for _ in 0..steps {
-            if self.scheduled_events.is_empty() {
+            if self.scheduler.is_empty() {
                 return RunResult::Incomplete;
             }
             self.advance();
@@ -662,7 +728,7 @@ impl<'a, P: Progression> Simulation<'a, P> {
     }
 }
 
-impl<'a> Simulation<'a, ReversibleProgression> {
+impl<'sim> Simulation<'sim, ReversibleProgression> {
     /// Go one step back in the history of the simulation.
     ///
     /// # Errors
@@ -738,15 +804,16 @@ assignment:
     - [0, 1, 0]
     - [1, 1, 0]
     - [0, 1, 1]"#;
-        let sim = Simulation::<ReversibleProgression>::new(
+        let sim = Simulation::new(
             &Config::from_yaml(Cursor::new(config)).unwrap(),
             vec![config::Query {
                 selected_shards: None,
                 selection_time: 0,
                 retrieval_times: vec![],
             }],
+            ReversibleProgression::default(),
         );
-        assert_eq!(sim.scheduled_events.len(), 8);
-        assert!(sim.incoming_queries.is_empty());
+        assert_eq!(sim.scheduler.len(), 8);
+        assert!(sim.components.incoming_queries.is_empty());
     }
 }

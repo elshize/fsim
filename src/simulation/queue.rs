@@ -131,7 +131,6 @@ impl<'a, T: std::fmt::Debug, P> Default for Queue<'a, T, P> {
 
 impl<'a, T: std::fmt::Debug, P> Queue<'a, T, P> {
     /// Constructs a new unbounded queue.
-    #[must_use]
     pub fn new() -> Self {
         Self {
             elements: VecDeque::new(),

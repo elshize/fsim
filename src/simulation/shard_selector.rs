@@ -37,7 +37,7 @@ impl<'a> Shards<'a> {
 /// **Important Note**: this interface will likely evolve to depend on more dynamic information.
 pub trait ShardSelector {
     /// Returns shard selection time and selected shard IDs.
-    fn select(&self, query: Query) -> ShardSelection;
+    fn select(&self, query: Query) -> ShardSelection<'_>;
 }
 
 /// Selector that always selects all shards. It also returns 0 as selection time, since it is
@@ -54,7 +54,7 @@ impl ExhaustiveSelector {
 }
 
 impl ShardSelector for ExhaustiveSelector {
-    fn select(&self, _: Query) -> ShardSelection {
+    fn select(&self, _: Query) -> ShardSelection<'_> {
         log::trace!("Selected {} shards", self.num_shards);
         ShardSelection {
             time: Duration::new(0, 0),
