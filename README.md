@@ -118,9 +118,7 @@ In short, you can use arrows to move between panes, `Enter` to activate a pane o
 
 ## No TUI Mode
 
-Although TUI is very convenient for getting important insights into the inner workings of the simulation, eventually, we want to run a longer simulation and report its statistics. This is what `--no-tui` mode is for.
-
-> `--no-tui` mode is not yet implemented.
+Although TUI is very convenient for getting important insights into the inner workings of the simulation, eventually, we want to run a longer simulation and report its statistics. This is what `--no-ui` mode is for. When using no-ui mode, you will also need to define the simulation `--time`.
 
 [Cargo]: https://doc.rust-lang.org/cargo/
 [Rust]: https://www.rust-lang.org/
