@@ -192,11 +192,11 @@ fn main() {
 mod test {
     use super::*;
     use std::fs::write;
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     #[test]
     fn test_input_from_file() -> Result<()> {
-        let dir = TempDir::new("fsim")?;
+        let dir = TempDir::new()?;
         let file_path = dir.path().join("queries");
         write(&file_path, "INPUT")?;
         let mut input = Input::new(Some(file_path))?;

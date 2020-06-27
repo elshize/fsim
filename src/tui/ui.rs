@@ -6,12 +6,12 @@ use tui::{
     backend::Backend,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    widgets::{Block, Borders, Paragraph, Row, SelectableList, Table, Text},
+    widgets::{Block, Borders, List, ListState, Paragraph, Row, Table, Text},
     Frame,
 };
 
-fn format_query((query, status): &(Query, QueryStatus)) -> String {
-    format!("{}: QID({}) {:?}", query.request, query.id, status)
+fn format_query((query, status): &(Query, QueryStatus)) -> Text<'_> {
+    Text::raw(format!("{}: QID({}) {:?}", query.request, query.id, status))
 }
 
 fn render_query_list<'a, B: Backend>(
@@ -22,13 +22,14 @@ fn render_query_list<'a, B: Backend>(
     selected: Option<usize>,
 ) {
     let items: Vec<_> = queries.iter().map(format_query).collect();
-    let mut list = SelectableList::default()
+    let mut state = ListState::default();
+    let list = List::new(items.into_iter())
         .block(block)
-        .items(&items)
-        .select(selected)
         .highlight_style(Style::default().modifier(Modifier::BOLD).fg(Color::Red))
         .highlight_symbol(">");
-    frame.render(&mut list, rect);
+    // TODO(michal): It might be possible to select it dynamically now.
+    state.select(selected);
+    frame.render_stateful_widget(list, rect, &mut state);
 }
 
 fn render_query_details<'a, B: Backend>(
@@ -43,8 +44,8 @@ fn render_query_details<'a, B: Backend>(
         Text::raw(format!("{:#?}\n", query)),
         Text::raw(format!("{:#?}\n", status)),
     ];
-    let mut paragraph = Paragraph::new(text.iter()).block(block);
-    frame.render(&mut paragraph, rect);
+    let paragraph = Paragraph::new(text.iter()).block(block);
+    frame.render_widget(paragraph, rect);
 }
 
 fn render_logs<'a, B: Backend>(
@@ -54,14 +55,14 @@ fn render_logs<'a, B: Backend>(
     logs: impl Iterator<Item = &'a String>,
     selected: Option<usize>,
 ) {
-    let items: Vec<_> = logs.collect();
+    let items: Vec<_> = logs.map(Text::raw).collect();
     let selected = selected.or_else(|| items.iter().enumerate().map(|(idx, _)| idx).last());
-    let mut list = SelectableList::default()
+    let mut state = ListState::default();
+    let list = List::new(items.into_iter())
         .block(block)
-        .select(selected)
-        .highlight_style(Style::default().fg(Color::Blue))
-        .items(&items);
-    frame.render(&mut list, rect);
+        .highlight_style(Style::default().fg(Color::Blue));
+    state.select(selected);
+    frame.render_stateful_widget(list, rect, &mut state);
 }
 
 fn render_stats<B: Backend>(
@@ -98,14 +99,14 @@ fn render_stats<B: Backend>(
             },
         ],
     ];
-    let mut table = Table::new(
+    let table = Table::new(
         [""].iter(),
         table.into_iter().map(|v| Row::Data(v.into_iter())),
     )
     .header_style(Style::default().fg(Color::Yellow).modifier(Modifier::BOLD))
     .block(block)
     .widths(&[Constraint::Percentage(30), Constraint::Percentage(70)]);
-    frame.render(&mut table, rect);
+    frame.render_widget(table, rect);
 }
 
 fn block(title: &str, mode: Option<Mode>) -> Block<'_> {

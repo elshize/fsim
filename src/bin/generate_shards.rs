@@ -169,12 +169,12 @@ mod test {
     use std::collections::BTreeSet;
     use std::fs::File;
     use std::io::{BufRead, BufReader};
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     proptest! {
         #[test]
         fn test_by_url(seed: u64) {
-            let temp = TempDir::new("").unwrap();
+            let temp = TempDir::new().unwrap();
             let urls_path = temp.path().join("urls");
             let docs_path = temp.path().join("docs");
             let mut data: Vec<(String, String)> = (0..=9)

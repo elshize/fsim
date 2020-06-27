@@ -20,7 +20,7 @@ impl Status {
 
     /// Iterates over finished queries.
     pub fn finished<'a>(&'a self) -> Box<dyn Iterator<Item = (Query, QueryStatus)> + 'a> {
-        Box::new(self.past_queries.iter().copied())
+        Box::new(self.past_queries.iter().map(|(&q, &s)| (q, s)))
     }
 }
 
@@ -58,7 +58,7 @@ impl crate::simulation::Status for Status {
     }
 
     fn active<'a>(&'a self) -> Box<dyn Iterator<Item = (Query, QueryStatus)> + 'a> {
-        Box::new(self.active_queries.iter().copied())
+        Box::new(self.active_queries.iter().map(|(&q, &s)| (q, s)))
     }
 
     fn active_query(&self, query: &Query) -> &QueryStatus {

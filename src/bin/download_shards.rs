@@ -112,7 +112,7 @@ impl Opt {
 }
 
 fn download_file<P: AsRef<Path>>(src: Url, dest: P) -> anyhow::Result<()> {
-    std::fs::write(dest, reqwest::blocking::get(src)?.text()?)?;
+    std::fs::write(dest, attohttpc::get(src).send()?.text()?)?;
     Ok(())
 }
 
