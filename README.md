@@ -44,7 +44,7 @@ target/release/simulate --help
 Alternatively, you can run the binary with `cargo`:
 
 ```bash
-cargo run -- --help
+cargo run --release --bin simulate -- --help
 ```
 
 Notice the `--`, which separates Cargo's arguments from the arguments of the target application.
