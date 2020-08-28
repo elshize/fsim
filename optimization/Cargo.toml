@@ -1,0 +1,28 @@
+[package]
+name = "optimization"
+version = "0.1.0"
+authors = ["Michal Siedlaczek <michal.siedlaczek@nyu.edu>"]
+edition = "2018"
+
+[[bin]]
+name = "assign-replicas"
+path = "src/assign_replicas.rs"
+
+[dependencies]
+anyhow = "1.0"
+rand = "0.7"
+rand_chacha = "0.2"
+rand_distr = "0.2"
+itertools = "0.9"
+nalgebra = "0.21"
+ordered-float = "1.0"
+lp-modeler = "0.4.2"
+indexed_vec = { version = "1.2", default-features = false }
+statrs = "0.12"
+thiserror = "1"
+structopt = "0.3"
+ndarray = "0.13"
+
+[dev-dependencies]
+proptest = "0.10"
+testing = { path = "../testing" }
