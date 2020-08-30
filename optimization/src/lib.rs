@@ -53,3 +53,23 @@ array_wrapper!(ShardReplicas, u32, "Shard replica counts.");
 array_wrapper!(ShardProbabilities, f32, "Shard probabilities.");
 array_wrapper!(MachineCapacities, f32, "Machine capacities vector.");
 array_wrapper!(MachineInhibitions, f32, "Machine inhibitions vector.");
+
+/// Container grouping shard parameters.
+pub struct ShardParams {
+    /// Cost of running shards relative to other shards.
+    pub loads: ShardLoads,
+    /// Physical space used by shards.
+    pub volumes: ShardVolumes,
+    /// Number of replicas used for shards.
+    pub replicas: ShardReplicas,
+    /// Overall probability of shards being requested (all equal to 1.0 in exhaustive routing).
+    pub probabilities: ShardProbabilities,
+}
+
+/// Container grouping machine parameters.
+pub struct MachineParams {
+    /// How much of shard volume fits in machines.
+    pub capacities: MachineCapacities,
+    /// Slowdown factor, relative to other shards. All equal 1 if machines considered identical.
+    pub inhibitions: MachineInhibitions,
+}

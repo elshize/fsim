@@ -1,6 +1,6 @@
 use crate::{
-    Error, MachineCapacities, MachineInhibitions, Result, ShardLoads, ShardProbabilities,
-    ShardReplicas, ShardVolumes,
+    Error, MachineCapacities, MachineInhibitions, MachineParams, Result, ShardLoads, ShardParams,
+    ShardProbabilities, ShardReplicas, ShardVolumes,
 };
 use ndarray::{Array2, ArrayView2, Axis};
 use ordered_float::OrderedFloat;
@@ -88,6 +88,7 @@ pub fn lower_bound_mean_machine_load(loads: ArrayView2<'_, f32>, replicas: &Shar
 
 impl ReplicaAssignment {
     /// Constructs an empty assignment without any assigned replicas.
+    #[must_use]
     pub fn empty(num_machines: NonZeroUsize, num_shards: NonZeroUsize) -> Self {
         Self(Array2::<bool>::default((
             num_machines.into(),
@@ -163,7 +164,7 @@ impl ReplicaAssignment {
             NonZeroUsize::new(num_machines).ok_or(Error::ZeroMachines)?,
             NonZeroUsize::new(num_shards).ok_or(Error::ZeroShards)?,
         );
-        let mut load_cap = lower_bound_mean_machine_load(loads.clone(), replicas);
+        let mut load_cap = lower_bound_mean_machine_load(loads, replicas);
         let mut replicas: Vec<_> = replicas
             .iter()
             .copied()
@@ -203,11 +204,13 @@ impl ReplicaAssignment {
     }
 
     /// Returns the number of machines (rows).
+    #[must_use]
     pub fn num_machines(&self) -> usize {
         self.0.len_of(Axis(0))
     }
 
     /// Returns the number of shards (columns).
+    #[must_use]
     pub fn num_shards(&self) -> usize {
         self.0.len_of(Axis(1))
     }
@@ -225,12 +228,9 @@ impl ReplicaAssignment {
         let mut copy = self.clone();
         let shard = Uniform::new(0, self.num_shards()).sample(rng);
         let (zeroes, ones) = self.partition_column_by_value(shard);
-        match (zeroes.choose(rng), ones.choose(rng)) {
-            (Some(&to), Some(&from)) => {
-                copy.0[[from, shard]] = false;
-                copy.0[[to, shard]] = true;
-            }
-            _ => {}
+        if let (Some(&to), Some(&from)) = (zeroes.choose(rng), ones.choose(rng)) {
+            copy.0[[from, shard]] = false;
+            copy.0[[to, shard]] = true;
         }
         copy
     }
@@ -284,6 +284,7 @@ impl ReplicaAssignment {
 
     /// Calculates the maximum load across all machines with respect to the the weights in the load
     /// matrix `loads`.
+    #[must_use]
     pub fn max_machine_load(&self, loads: ArrayView2<'_, f32>) -> f32 {
         self.machine_loads(&loads)
             .map(OrderedFloat)
@@ -295,36 +296,46 @@ impl ReplicaAssignment {
     /// Returns two vectors containing indices of the cells in the given column that have value
     /// `false` and `true`, respectively.
     fn partition_column_by_value(&self, shard: usize) -> (Vec<usize>, Vec<usize>) {
-        (0..self.num_machines()).partition(|&m| self.0[(m, shard)] == false)
+        (0..self.num_machines()).partition(|&m| !self.0[(m, shard)])
     }
 }
 
 impl<'p, R: Rng> Population<'p, R> {
     fn new(
         size: usize,
-        loads: &'p ShardLoads,
-        volumes: &'p ShardVolumes,
-        replicas: &'p ShardReplicas,
-        probabilities: &'p ShardProbabilities,
-        capacities: &'p MachineCapacities,
-        machine_inhibitions: &'p MachineInhibitions,
+        shards: &'p ShardParams,
+        machines: &'p MachineParams,
+        // loads: &'p ShardLoads,
+        // volumes: &'p ShardVolumes,
+        // replicas: &'p ShardReplicas,
+        // probabilities: &'p ShardProbabilities,
+        // capacities: &'p MachineCapacities,
+        // machine_inhibitions: &'p MachineInhibitions,
         rng: &'p mut R,
     ) -> Self {
-        let loads = machine_inhibitions
+        let loads = machines
+            .inhibitions
             .0
             .view()
-            .into_shape((machine_inhibitions.len(), 1))
+            .into_shape((machines.inhibitions.len(), 1))
             .expect("Always can reshape")
             .dot(
-                &loads
+                &shards
+                    .loads
                     .0
                     .view()
-                    .into_shape((1, loads.len()))
+                    .into_shape((1, shards.loads.len()))
                     .expect("Always can reshape"),
             )
-            .dot(&Array2::from_diag(&probabilities.0));
+            .dot(&Array2::from_diag(&shards.probabilities.0));
         let population = std::iter::repeat_with(|| {
-            ReplicaAssignment::random_weighted(loads.view(), &volumes, &replicas, &capacities, rng)
+            ReplicaAssignment::random_weighted(
+                loads.view(),
+                &shards.volumes,
+                &shards.replicas,
+                &machines.capacities,
+                rng,
+            )
         })
         .filter_map(|a| {
             a.ok().map(|a| {
@@ -337,9 +348,9 @@ impl<'p, R: Rng> Population<'p, R> {
         let mut population = Self {
             population,
             loads,
-            volumes,
-            replicas,
-            capacities,
+            volumes: &shards.volumes,
+            replicas: &shards.replicas,
+            capacities: &machines.capacities,
             rng,
         };
         population.sort();
@@ -356,6 +367,7 @@ impl<'p, R: Rng> Population<'p, R> {
 
     /// Takes a third of population with the lowest max load and duplicates each of them twice:
     /// once by random move, once by random swap.
+    #[allow(clippy::mut_mut)]
     fn breed(&mut self) {
         self.population.truncate(self.population.len() / 2);
         self.population.shuffle(self.rng);
@@ -407,6 +419,7 @@ impl AssignmentBuilder {
     /// The default number of generations is 300 and the population size is 3000.
     ///
     /// Each shard will have only 1 replica by default.
+    #[must_use]
     pub fn new(dimension: Dimension) -> Self {
         Self {
             loads: None,
@@ -433,28 +446,26 @@ impl AssignmentBuilder {
     builder_property!(inhibitions, MachineInhibitions, "Sets machine inhibitions.");
 
     /// Consumes the builder and returns an optimized replica assignment.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if assignmnet is infeasible.
     pub fn assign<R: Rng>(mut self, rng: &mut R) -> Result<(ReplicaAssignment, f32)> {
         let Dimension {
             num_shards,
             num_machines,
         } = self.dimension;
-        let loads = default_array(self.loads.take(), 1.0, num_shards);
-        let volumes = default_array(self.volumes.take(), 1.0, num_shards);
-        let replicas = default_array(self.replicas.take(), 1, num_shards);
-        let probabilities = default_array(self.probabilities.take(), 1.0, num_shards);
-        let capacities = default_array(self.capacities.take(), f32::MAX, num_machines);
-        let inhibitions = default_array(self.inhibitions.take(), 1.0, num_machines);
-        assign_replicas(
-            loads,
-            volumes,
-            replicas,
-            probabilities,
-            capacities,
-            inhibitions,
-            rng,
-            self.generations,
-            self.population,
-        )
+        let shards = ShardParams {
+            loads: default_array(self.loads.take(), 1.0, num_shards),
+            volumes: default_array(self.volumes.take(), 1.0, num_shards),
+            replicas: default_array(self.replicas.take(), 1, num_shards),
+            probabilities: default_array(self.probabilities.take(), 1.0, num_shards),
+        };
+        let machines = MachineParams {
+            capacities: default_array(self.capacities.take(), f32::MAX, num_machines),
+            inhibitions: default_array(self.inhibitions.take(), 1.0, num_machines),
+        };
+        assign_replicas(&shards, &machines, rng, self.generations, self.population)
     }
 }
 
@@ -467,26 +478,13 @@ where
 }
 
 fn assign_replicas<R: Rng>(
-    loads: ShardLoads,
-    volumes: ShardVolumes,
-    replicas: ShardReplicas,
-    probabilities: ShardProbabilities,
-    capacities: MachineCapacities,
-    machine_inhibitions: MachineInhibitions,
+    shards: &ShardParams,
+    machines: &MachineParams,
     rng: &mut R,
     generations: usize,
     population: usize,
 ) -> Result<(ReplicaAssignment, f32)> {
-    let mut population = Population::new(
-        population,
-        &loads,
-        &volumes,
-        &replicas,
-        &probabilities,
-        &capacities,
-        &machine_inhibitions,
-        rng,
-    );
+    let mut population = Population::new(population, shards, machines, rng);
     let mut optimal = population.top().ok_or(Error::PossiblyInfeasible)?.clone();
     for generation in 0..generations {
         population.breed();

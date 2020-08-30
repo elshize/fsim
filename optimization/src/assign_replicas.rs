@@ -17,13 +17,14 @@
 
 use anyhow::Result;
 use ndarray::arr1;
-use optimization::*;
+use optimization::{AssignmentBuilder, Dimension};
 use rand::SeedableRng;
 use rand_chacha::ChaChaRng;
 use std::iter::repeat;
 use structopt::StructOpt;
 
 /// For testing: CW09B+selective+natural
+#[allow(clippy::all, clippy::pedantic)]
 pub const SHARD_LOADS: [f32; 128] = [
     2769.4465, 2563.0969, 1658.6009, 1907.1591, 4095.8377, 2595.4211, 1902.8827, 1871.9019,
     2811.6678, 1330.1244, 2173.1014, 1736.8571, 1910.7388, 3055.4968, 2306.2665, 3043.5685,
@@ -44,6 +45,7 @@ pub const SHARD_LOADS: [f32; 128] = [
 ];
 
 /// For testing: CW09B+selective+natural
+#[allow(clippy::all, clippy::pedantic)]
 pub const SHARD_VOLUMES: [f32; 128] = [
     22.2293262, 12.6619292, 9.9792899, 7.4227925, 35.9115986, 16.9188487, 12.718849, 9.8888731,
     27.6115509, 11.1012769, 29.3419464, 9.2526493, 10.9776041, 31.5410774, 17.0611388, 21.2793979,
@@ -68,7 +70,7 @@ struct Opt {
     //
 }
 
-fn assign(_opt: Opt) -> Result<()> {
+fn assign(_opt: &Opt) -> Result<()> {
     let mut builder = AssignmentBuilder::new(Dimension {
         num_shards: 128,
         num_machines: 20,
@@ -77,7 +79,7 @@ fn assign(_opt: Opt) -> Result<()> {
         .loads(arr1(&SHARD_LOADS).into())
         //.volumes(arr1(&SHARD_VOLUMES).into())
         .replicas(repeat(3).take(128).collect());
-    let goal = (SHARD_LOADS.iter().sum::<f32>() * 3.0) / 20 as f32;
+    let goal = (SHARD_LOADS.iter().sum::<f32>() * 3.0) / 20.0;
     //let goal = (128.0 * 3.0) / 20 as f32;
     let mut rng = ChaChaRng::from_entropy();
     let (_assignment, max_load) = builder.assign(&mut rng)?;
@@ -86,7 +88,7 @@ fn assign(_opt: Opt) -> Result<()> {
 }
 
 fn main() {
-    if let Err(err) = assign(Opt::from_args()) {
+    if let Err(err) = assign(&Opt::from_args()) {
         eprintln!("{}", err);
     }
 }

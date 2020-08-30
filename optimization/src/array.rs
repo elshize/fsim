@@ -29,6 +29,7 @@ macro_rules! array_wrapper {
 
         impl $name {
             /// Vector length.
+            #[must_use]
             pub fn len(&self) -> usize {
                 self.0.len()
             }
@@ -39,6 +40,7 @@ macro_rules! array_wrapper {
             }
 
             /// Returns the underlying vector.
+            #[must_use]
             pub fn vec(&self) -> &::ndarray::Array1<$t> {
                 &self.0
             }
