@@ -1,23 +1,38 @@
 use crate::{
-    Error, MachineCapacities, MachineInhibitions, MachineParams, Result, ShardLoads, ShardParams,
-    ShardProbabilities, ShardReplicas, ShardVolumes,
+    solver::TimeoutCbcSolver, Error, MachineCapacities, MachineInhibitions, MachineParams, Result,
+    ShardLoads, ShardParams, ShardProbabilities, ShardReplicas, ShardVolumes,
 };
-use ndarray::{Array2, ArrayView2, Axis};
+use std::convert::TryFrom;
+use std::iter::repeat;
+use std::num::NonZeroUsize;
+use std::time::Duration;
+
+use indicatif::ProgressBar;
+use lp_modeler::dsl::{
+    lp_sum,
+    sum,
+    BoundableLp,
+    LpBinary,
+    LpConstraint,
+    LpContinuous,
+    LpObjective,
+    LpOperations,
+    LpProblem, //Problem,
+};
+use lp_modeler::solvers::{CbcSolver, SolverTrait};
+use ndarray::{Array1, Array2, ArrayView2, Axis};
 use ordered_float::OrderedFloat;
 use rand::distributions::WeightedIndex;
 use rand::seq::SliceRandom;
 use rand::Rng;
 use rand_distr::{Distribution, Uniform};
-use std::convert::TryFrom;
-use std::iter::repeat;
-use std::num::NonZeroUsize;
 
 /// Assignment of shard replicas to machines.
 ///
 /// In assignment `a`, `a[(m, s)] == true` iff a replica of shard `s` is assigned to machine `m`.
 /// This structure wraps around a two-dimensional array of `bool`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReplicaAssignment(Array2<bool>);
+pub struct ReplicaAssignment(pub Array2<bool>);
 
 /// Dimension of an optimization problem.
 #[derive(Debug, Copy, Clone)]
@@ -36,8 +51,7 @@ pub struct AssignmentBuilder {
     probabilities: Option<ShardProbabilities>,
     capacities: Option<MachineCapacities>,
     inhibitions: Option<MachineInhibitions>,
-    generations: usize,
-    population: usize,
+    progress_bar: Option<ProgressBar>,
     dimension: Dimension,
 }
 
@@ -305,30 +319,24 @@ impl<'p, R: Rng> Population<'p, R> {
         size: usize,
         shards: &'p ShardParams,
         machines: &'p MachineParams,
-        // loads: &'p ShardLoads,
-        // volumes: &'p ShardVolumes,
-        // replicas: &'p ShardReplicas,
-        // probabilities: &'p ShardProbabilities,
-        // capacities: &'p MachineCapacities,
-        // machine_inhibitions: &'p MachineInhibitions,
         rng: &'p mut R,
+        progress_bar: &mut ProgressBar,
     ) -> Self {
-        let loads = machines
-            .inhibitions
-            .0
-            .view()
-            .into_shape((machines.inhibitions.len(), 1))
-            .expect("Always can reshape")
-            .dot(
-                &shards
-                    .loads
-                    .0
-                    .view()
-                    .into_shape((1, shards.loads.len()))
-                    .expect("Always can reshape"),
-            )
-            .dot(&Array2::from_diag(&shards.probabilities.0));
+        let loads = calculate_ilp_weights(shards, machines);
+        let random_population: Vec<_> = std::iter::repeat_with(|| {
+            progress_bar.inc(1);
+            ReplicaAssignment::random(&shards.volumes, &shards.replicas, &machines.capacities, rng)
+        })
+        .filter_map(|a| {
+            a.ok().map(|a| {
+                let load = a.max_machine_load(loads.view());
+                (a, load)
+            })
+        })
+        .take(size / 2)
+        .collect();
         let population = std::iter::repeat_with(|| {
+            progress_bar.inc(1);
             ReplicaAssignment::random_weighted(
                 loads.view(),
                 &shards.volumes,
@@ -343,7 +351,9 @@ impl<'p, R: Rng> Population<'p, R> {
                 (a, load)
             })
         })
-        .take(size)
+        //.take(size)
+        .take((size + 1) / 2)
+        .chain(random_population)
         .collect();
         let mut population = Self {
             population,
@@ -365,11 +375,12 @@ impl<'p, R: Rng> Population<'p, R> {
         self.population.first()
     }
 
-    /// Takes a third of population with the lowest max load and duplicates each of them twice:
-    /// once by random move, once by random swap.
     #[allow(clippy::mut_mut)]
     fn breed(&mut self) {
-        self.population.truncate(self.population.len() / 2);
+        let len = self.population.len();
+        // Shuffle after `len / 6` to include 1/6 random assignments + 1/6 best assignments
+        self.population[len / 6..].shuffle(self.rng);
+        self.population.truncate(len / 3);
         self.population.shuffle(self.rng);
         let rng = &mut self.rng;
         let loads = &self.loads;
@@ -382,29 +393,40 @@ impl<'p, R: Rng> Population<'p, R> {
                 (mutated, load)
             })
             .collect();
-        // let swapped: Vec<_> = self
-        //     .population
-        //     .iter()
-        //     .map(|(p, _)| {
-        //         let swapped = p.clone().random_swap(rng);
-        //         let load = swapped.max_machine_load(loads.view());
-        //         (swapped, load)
-        //     })
-        //     .collect();
+        let swapped: Vec<_> = self
+            .population
+            .iter()
+            .map(|(p, _)| {
+                let swapped = p.clone().random_swap(rng);
+                let load = swapped.max_machine_load(loads.view());
+                (swapped, load)
+            })
+            .collect();
         self.population.extend_from_slice(&moved);
-        // self.population.extend_from_slice(&swapped);
+        self.population.extend_from_slice(&swapped);
         self.sort();
     }
 }
 
 macro_rules! builder_property {
     ($prop:ident, $t:ty, $comment:literal) => {
-        /// $literal
+        /// $comment
         pub fn $prop(&mut self, $prop: $t) -> &mut Self {
             self.$prop = Some($prop);
             self
         }
     };
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum AssignmentMethod {
+    Approximate {
+        population: usize,
+        iterations: usize,
+    },
+    Ilp {
+        timeout: Duration,
+    },
 }
 
 impl AssignmentBuilder {
@@ -428,8 +450,7 @@ impl AssignmentBuilder {
             probabilities: None,
             capacities: None,
             inhibitions: None,
-            generations: 1000,
-            population: 2000,
+            progress_bar: None,
             dimension,
         }
     }
@@ -444,13 +465,19 @@ impl AssignmentBuilder {
     );
     builder_property!(capacities, MachineCapacities, "Sets machine capacities.");
     builder_property!(inhibitions, MachineInhibitions, "Sets machine inhibitions.");
+    builder_property!(progress_bar, ProgressBar, "Sets progress bar.");
 
     /// Consumes the builder and returns an optimized replica assignment.
     ///
     /// # Errors
     ///
-    /// Returns error if assignmnet is infeasible.
-    pub fn assign<R: Rng>(mut self, rng: &mut R) -> Result<(ReplicaAssignment, f32)> {
+    /// Returns error if assignmnet is infeasible, or if the timeout has been exceeded
+    /// for the ILP method.
+    pub fn assign<R: Rng>(
+        mut self,
+        rng: &mut R,
+        method: AssignmentMethod,
+    ) -> Result<(ReplicaAssignment, f32)> {
         let Dimension {
             num_shards,
             num_machines,
@@ -465,7 +492,21 @@ impl AssignmentBuilder {
             capacities: default_array(self.capacities.take(), f32::MAX, num_machines),
             inhibitions: default_array(self.inhibitions.take(), 1.0, num_machines),
         };
-        assign_replicas(&shards, &machines, rng, self.generations, self.population)
+        let mut progress_bar = self.progress_bar.unwrap_or_else(ProgressBar::hidden);
+        match method {
+            AssignmentMethod::Approximate {
+                population,
+                iterations,
+            } => assign_replicas(
+                &shards,
+                &machines,
+                rng,
+                iterations,
+                population,
+                &mut progress_bar,
+            ),
+            AssignmentMethod::Ilp { timeout } => assign_ilp(&shards, &machines, timeout),
+        }
     }
 }
 
@@ -481,20 +522,159 @@ fn assign_replicas<R: Rng>(
     shards: &ShardParams,
     machines: &MachineParams,
     rng: &mut R,
-    generations: usize,
+    max_generations: usize,
     population: usize,
+    progress_bar: &mut ProgressBar,
 ) -> Result<(ReplicaAssignment, f32)> {
-    let mut population = Population::new(population, shards, machines, rng);
+    progress_bar.set_message("Generating initial population");
+    let mut population = Population::new(population, shards, machines, rng, progress_bar);
     let mut optimal = population.top().ok_or(Error::PossiblyInfeasible)?.clone();
-    for generation in 0..generations {
+    let mut repeated = 0;
+    for generation in 0..max_generations {
         population.breed();
         let top = population.top().unwrap();
         if top.1 < optimal.1 {
             optimal = (top.0.clone(), top.1);
+            repeated = 0;
+        } else if top.1 == optimal.1 {
+            repeated += 1;
+            if repeated == 100 {
+                break;
+            }
         }
-        println!("{} {}", generation, optimal.1);
+        progress_bar.set_message(&format!(
+            "Gerneration: {}; Max load: {}",
+            generation, optimal.1
+        ));
     }
     Ok((optimal.0.clone(), optimal.1))
+}
+
+fn calculate_ilp_weights(shards: &ShardParams, machines: &MachineParams) -> Array2<f32> {
+    let mut shard_vec = shards.probabilities.0.clone();
+    shard_vec
+        .iter_mut()
+        .zip(&shards.replicas.0)
+        .zip(&shards.loads.0)
+        .for_each(|((w, &r), &l)| *w *= l / r as f32);
+
+    machines
+        .inhibitions
+        .0
+        .view()
+        .into_shape((machines.inhibitions.len(), 1))
+        .expect("Always can reshape")
+        .dot(
+            &shard_vec
+                .view()
+                .into_shape((1, shards.loads.len()))
+                .expect("Always can reshape"),
+        )
+}
+
+fn add_ilp_load_constraints<'a>(
+    assignment_vars: &'a Array2<LpBinary>,
+    weights: &'a Array2<f32>,
+    objective_var: &'a LpContinuous,
+) -> impl Iterator<Item = LpConstraint> + 'a {
+    assignment_vars
+        .genrows()
+        .into_iter()
+        .zip(weights.gencolumns())
+        .map(move |(vars, weights)| {
+            lp_sum(&vars.iter().zip(&weights).map(|(v, &w)| w * v).collect()).le(objective_var)
+        })
+}
+
+fn add_ilp_capacity_constraints<'a>(
+    assignment_vars: &'a Array2<LpBinary>,
+    volumes: &'a ShardVolumes,
+    capacities: &'a MachineCapacities,
+) -> impl Iterator<Item = LpConstraint> + 'a {
+    assignment_vars
+        .genrows()
+        .into_iter()
+        .zip(&capacities.0)
+        .map(move |(vars, &capacity)| {
+            lp_sum(&vars.iter().zip(&volumes.0).map(|(v, &w)| w * v).collect()).le(capacity)
+        })
+}
+
+fn add_ilp_replica_constraints<'a>(
+    assignment_vars: &'a Array2<LpBinary>,
+    replicas: &'a ShardReplicas,
+) -> impl Iterator<Item = LpConstraint> + 'a {
+    assignment_vars
+        .gencolumns()
+        .into_iter()
+        .zip(&replicas.0)
+        .map(move |(vars, &replicas)| lp_sum(&vars.iter().collect()).equal(replicas as f32))
+}
+
+fn assignment_var_name(machine: usize, shard: usize) -> String {
+    format!("a_{}_{}", machine, shard)
+}
+
+fn ilp_assignment_vars(dimension: Dimension) -> Array2<LpBinary> {
+    let Dimension {
+        num_shards,
+        num_machines,
+    } = dimension;
+    let assignment_vars: Vec<_> = (0..num_machines)
+        .flat_map(|m| (0..num_shards).map(move |s| LpBinary::new(&assignment_var_name(m, s))))
+        .collect();
+    Array2::from_shape_vec((num_machines, num_shards), assignment_vars)
+        .expect("Wrong shape of assignment matrix")
+}
+
+fn assign_ilp(
+    shards: &ShardParams,
+    machines: &MachineParams,
+    timeout: Duration,
+) -> Result<(ReplicaAssignment, f32)> {
+    let num_shards = shards.probabilities.len();
+    let num_machines = machines.inhibitions.len();
+
+    let weights = calculate_ilp_weights(shards, machines);
+
+    let mut problem = LpProblem::new("Balanced replica assignment", LpObjective::Minimize);
+    let z = LpContinuous::new("Z");
+    problem += &z;
+
+    let assignment_vars = ilp_assignment_vars(Dimension {
+        num_shards,
+        num_machines,
+    });
+
+    let constraints = add_ilp_load_constraints(&assignment_vars, &weights, &z)
+        .chain(add_ilp_capacity_constraints(
+            &assignment_vars,
+            &shards.volumes,
+            &machines.capacities,
+        ))
+        .chain(add_ilp_replica_constraints(
+            &assignment_vars,
+            &shards.replicas,
+        ));
+    for constraint in constraints {
+        problem += constraint;
+    }
+    let solver = TimeoutCbcSolver::default();
+    let (_, result) = solver.run(&problem, timeout)?;
+    println!("{:#?}", &result);
+    println!("{}", result.len());
+    let assignment_vars: Vec<_> = (0..num_machines)
+        .flat_map(|m| {
+            let map = &result;
+            (0..num_shards)
+                .map(move |s| map.get(&assignment_var_name(m, s)).copied().unwrap_or(0.0) == 1.0)
+        })
+        .collect();
+    let assignment = ReplicaAssignment(
+        Array2::from_shape_vec((num_machines, num_shards), assignment_vars).unwrap(),
+    );
+    let max_machine_load = assignment.max_machine_load(weights.view());
+    Ok((assignment, max_machine_load))
 }
 
 #[cfg(test)]

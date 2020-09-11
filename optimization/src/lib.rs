@@ -17,12 +17,12 @@
 #![deny(unsafe_code)]
 
 mod array;
-//mod distribution;
 mod replica;
+pub mod solver;
 //mod routing;
 
 //pub use distribution::AssignmentDistribution;
-pub use replica::{AssignmentBuilder, Dimension, ReplicaAssignment};
+pub use replica::{AssignmentBuilder, AssignmentMethod, Dimension, ReplicaAssignment};
 
 /// Error type encompassing all optimization errors.
 #[derive(Debug, thiserror::Error)]
@@ -42,6 +42,9 @@ pub enum Error {
     /// Greedy algorithm could not arrive at solution, problem could be infeasible.
     #[error("Greedy algorithm could not arrive at solution, problem could be infeasible.")]
     PossiblyInfeasible,
+    /// Error occurred during execution of (I)LP solver.
+    #[error("LP solver error: {0}")]
+    SolverError(#[from] solver::Error),
 }
 
 /// Result alias using [`Error`](enum.Error.html).
