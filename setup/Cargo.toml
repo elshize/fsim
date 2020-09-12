@@ -4,9 +4,17 @@ version = "0.1.0"
 authors = ["Michal Siedlaczek <michal.siedlaczek@nyu.edu>"]
 edition = "2018"
 
+[lib]
+name = "setup"
+path = "src/lib.rs"
+
 [[bin]]
 name = "download-shards"
 path = "src/download_shards.rs"
+
+[[bin]]
+name = "download-probabilities"
+path = "src/download_probabilities.rs"
 
 [[bin]]
 name = "generate-shards"
