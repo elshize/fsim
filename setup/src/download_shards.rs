@@ -36,7 +36,7 @@ struct Opt {
 impl Opt {
     /// Resolves the URL.
     fn url(&self) -> Url {
-        let dir = format!("{}-qkld-qinit/", self.collection);
+        let dir = format!("{}-QKLD-QInit/", self.collection);
         Url::parse(URL).unwrap().join(&dir).unwrap()
     }
 }
