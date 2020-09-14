@@ -35,16 +35,16 @@ See [Installation](#install) for an alternative way to build it.
 
 ## Running the application
 
-If you have built the project with the command above, the binary is now located in `target/release/simulate` and ready to run:
+If you have built the project with the command above, the binary is now located in `target/release/simulation` and ready to run:
 
 ```bash
-target/release/simulate --help
+target/release/simulation --help
 ```
 
 Alternatively, you can run the binary with `cargo`:
 
 ```bash
-cargo run --release --bin simulate -- --help
+cargo run --release --bin simulation -- --help
 ```
 
 Notice the `--`, which separates Cargo's arguments from the arguments of the target application.
@@ -61,17 +61,17 @@ cargo install --path .
 
 # Usage
 
-`simulate` is a TUI application, it looks more or less like this:
+`simulation` is a TUI application, it looks more or less like this:
 
 ![](misc/tui.png)
 
-You can run `simulate --help` to print help information about command line arguments. Two most important arguments are:
+You can run `simulation --help` to print help information about command line arguments. Two most important arguments are:
 1. Simulation configuration passed with `--config` option.
 2. Query log either passed as a positional argument or read from the standard input.
 
 To explore the application, you can run:
 ```bash
-simulate --config tests/config.yml tests/queries.jl
+simulation --config tests/config.yml tests/queries.jl
 ```
 
 ## Simulation Configuration
@@ -111,7 +111,7 @@ There is `tests/queries.jl` file you can use as an example.
 There is a set of default bindings to navigate the application, which you can print with:
 
 ```bash
-simulate --key-bindings
+simulation --key-bindings
 ```
 
 In short, you can use arrows to move between panes, `Enter` to activate a pane or see query details, `Esc` to come back to the previous view, and the usual keys to navigate up and down any list. You can also **maximize an active pane** with `F` key (`Shift+f`).
