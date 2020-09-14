@@ -44,7 +44,7 @@ pub enum Error {
     PossiblyInfeasible,
     /// Error occurred during execution of (I)LP solver.
     #[error("LP solver error: {0}")]
-    SolverError(#[from] solver::Error),
+    Solver(#[from] solver::Error),
 }
 
 /// Result alias using [`Error`](enum.Error.html).

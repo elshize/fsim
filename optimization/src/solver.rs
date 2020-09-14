@@ -12,7 +12,7 @@ use std::sync;
 use std::time::Duration;
 
 use lp_modeler::dsl::LpProblem;
-use lp_modeler::format::lp_format::*;
+use lp_modeler::format::lp_format::LpFileFormat;
 use lp_modeler::solvers::Status;
 
 /// Errors used when running the solver.
@@ -31,7 +31,6 @@ pub enum Error {
 
 /// This is a copy of `lp_modeler::CbcSolver` that supports running the solver with timeout.
 pub struct TimeoutCbcSolver {
-    name: String,
     command_name: String,
     temp_solution_file: String,
 }
@@ -39,7 +38,6 @@ pub struct TimeoutCbcSolver {
 impl Default for TimeoutCbcSolver {
     fn default() -> Self {
         Self {
-            name: "Cbc".to_string(),
             command_name: "cbc".to_string(),
             temp_solution_file: format!("{}.sol", Uuid::new_v4().to_string()),
         }
@@ -47,22 +45,8 @@ impl Default for TimeoutCbcSolver {
 }
 
 impl TimeoutCbcSolver {
-    pub fn command_name(&self, command_name: String) -> Self {
-        Self {
-            name: self.name.clone(),
-            command_name,
-            temp_solution_file: self.temp_solution_file.clone(),
-        }
-    }
-    pub fn temp_solution_file(&self, temp_solution_file: String) -> Self {
-        Self {
-            name: self.name.clone(),
-            command_name: self.command_name.clone(),
-            temp_solution_file,
-        }
-    }
-    fn read_solution(&self) -> Result<(Status, HashMap<String, f32>), String> {
-        fn read_specific_solution(f: &File) -> Result<(Status, HashMap<String, f32>), String> {
+    fn read_solution(&self) -> Result<(Status, HashMap<String, bool>), String> {
+        fn read_specific_solution(f: &File) -> Result<(Status, HashMap<String, bool>), String> {
             let mut vars_value: HashMap<_, _> = HashMap::new();
 
             let mut file = BufReader::new(f);
@@ -89,7 +73,7 @@ impl TimeoutCbcSolver {
                     result_line.remove(0);
                 };
                 if result_line.len() == 4 {
-                    match result_line[2].parse::<f32>() {
+                    match result_line[2].parse::<bool>() {
                         Ok(n) => {
                             vars_value.insert(result_line[1].to_string(), n);
                         }
@@ -108,16 +92,21 @@ impl TimeoutCbcSolver {
                 let _ = fs::remove_file(&self.temp_solution_file);
                 Ok(res)
             }
-            Err(_) => return Err("Cannot open file".to_string()),
+            Err(_) => Err("Cannot open file".to_string()),
         }
     }
 
     /// Attempts at solving the problem in `timeout` time.
+    ///
+    /// # Errors
+    ///
+    /// Error is returned if reading from or writing to temporary files fails,
+    /// or when the `timeout` is reached.
     pub fn run(
         &self,
         problem: &LpProblem,
         timeout: Duration,
-    ) -> Result<(Status, HashMap<String, f32>), Error> {
+    ) -> Result<(Status, HashMap<String, bool>), Error> {
         let file_model = &format!("{}.lp", problem.unique_name);
 
         problem
@@ -148,7 +137,7 @@ impl TimeoutCbcSolver {
                 .map_err(|_| Error::SolverCommand("Error attempting to wait".into()))?
             {
                 return if status.success() {
-                    self.read_solution().map_err(|e| Error::ReadSolution(e))
+                    self.read_solution().map_err(Error::ReadSolution)
                 } else {
                     Err(Error::SolverCommand(status.to_string()))
                 };

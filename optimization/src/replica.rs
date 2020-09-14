@@ -10,8 +10,6 @@ use std::time::Duration;
 use indicatif::ProgressBar;
 use lp_modeler::dsl::{
     lp_sum,
-    sum,
-    BoundableLp,
     LpBinary,
     LpConstraint,
     LpContinuous,
@@ -19,13 +17,14 @@ use lp_modeler::dsl::{
     LpOperations,
     LpProblem, //Problem,
 };
-use lp_modeler::solvers::{CbcSolver, SolverTrait};
-use ndarray::{Array1, Array2, ArrayView2, Axis};
+use ndarray::{Array2, ArrayView2, Axis};
 use ordered_float::OrderedFloat;
 use rand::distributions::WeightedIndex;
 use rand::seq::SliceRandom;
-use rand::Rng;
+use rand::{Rng, SeedableRng};
+use rand_chacha::ChaChaRng;
 use rand_distr::{Distribution, Uniform};
+use rayon::prelude::*;
 
 /// Assignment of shard replicas to machines.
 ///
@@ -382,22 +381,23 @@ impl<'p, R: Rng> Population<'p, R> {
         self.population[len / 6..].shuffle(self.rng);
         self.population.truncate(len / 3);
         self.population.shuffle(self.rng);
-        let rng = &mut self.rng;
+        let rng = ChaChaRng::from_rng(&mut self.rng).expect("Unable to construct an PRNG");
         let loads = &self.loads;
         let moved: Vec<_> = self
             .population
-            .iter()
-            .map(|(p, _)| {
-                let mutated = p.random_move(rng);
+            .par_iter()
+            .map_with(rng, move |mut rng, (p, _)| {
+                let mutated = p.random_move(&mut rng);
                 let load = mutated.max_machine_load(loads.view());
                 (mutated, load)
             })
             .collect();
+        let rng = ChaChaRng::from_rng(&mut self.rng).expect("Unable to construct an PRNG");
         let swapped: Vec<_> = self
             .population
-            .iter()
-            .map(|(p, _)| {
-                let swapped = p.clone().random_swap(rng);
+            .par_iter()
+            .map_with(rng, move |mut rng, (p, _)| {
+                let swapped = p.clone().random_swap(&mut rng);
                 let load = swapped.max_machine_load(loads.view());
                 (swapped, load)
             })
@@ -418,13 +418,19 @@ macro_rules! builder_property {
     };
 }
 
+/// Replica assignment method.
 #[derive(Debug, Clone, Copy)]
 pub enum AssignmentMethod {
+    /// Approximate algorithm.
     Approximate {
+        /// Start with this many random assignments.
         population: usize,
+        /// Run up to this many iterations.
         iterations: usize,
     },
+    /// ILP algorithm
     Ilp {
+        /// Stop and return error after this timeout.
         timeout: Duration,
     },
 }
@@ -536,7 +542,7 @@ fn assign_replicas<R: Rng>(
         if top.1 < optimal.1 {
             optimal = (top.0.clone(), top.1);
             repeated = 0;
-        } else if top.1 == optimal.1 {
+        } else if (top.1 - optimal.1).abs() < f32::EPSILON {
             repeated += 1;
             if repeated == 100 {
                 break;
@@ -666,8 +672,11 @@ fn assign_ilp(
     let assignment_vars: Vec<_> = (0..num_machines)
         .flat_map(|m| {
             let map = &result;
-            (0..num_shards)
-                .map(move |s| map.get(&assignment_var_name(m, s)).copied().unwrap_or(0.0) == 1.0)
+            (0..num_shards).map(move |s| {
+                map.get(&assignment_var_name(m, s))
+                    .copied()
+                    .unwrap_or(false)
+            })
         })
         .collect();
     let assignment = ReplicaAssignment(

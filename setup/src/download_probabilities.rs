@@ -46,13 +46,13 @@ impl Opt {
     }
 }
 
+#[allow(clippy::cast_precision_loss)]
 fn run(opt: &Opt) -> anyhow::Result<()> {
     let selections = attohttpc::get(opt.url()).send()?.text()?;
     let mut counts = vec![1_usize; opt.collection.num_shards()];
     for selection in selections.lines() {
         for shard in selection
             .split_whitespace()
-            .into_iter()
             .skip(1) // skips the query ID
             .take(opt.num_selected_shards)
         {
@@ -70,7 +70,7 @@ fn run(opt: &Opt) -> anyhow::Result<()> {
         }
     }
     for count in counts {
-        println!("{}", count as f32 / 200.0);
+        println!("{}", count as f64 / 200.0);
     }
     Ok(())
 }

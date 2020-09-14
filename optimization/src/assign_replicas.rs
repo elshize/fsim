@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Error, Result};
 use indicatif::ProgressBar;
-use ndarray::{Array1, ArrayView2};
+use ndarray::Array1;
 use ordered_float::OrderedFloat;
 use rand::SeedableRng;
 use rand_chacha::ChaChaRng;

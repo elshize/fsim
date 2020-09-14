@@ -25,7 +25,8 @@ pub enum Collection {
 
 impl Collection {
     /// Number of shards for the requested collection.
-    pub fn num_shards(&self) -> usize {
+    #[must_use]
+    pub fn num_shards(self) -> usize {
         match self {
             Collection::Gov2 => 199,
             Collection::Clueweb09b => 123,
@@ -54,6 +55,11 @@ impl FromStr for Collection {
 }
 
 /// Download a file from the `url` and store at `dest`.
+///
+/// # Errors
+///
+/// It will return an error if cannot connect, download fails, or an error occurs while writing the
+/// downloaded file to the local drive.
 pub fn download_file<P: AsRef<Path>>(url: &Url, dest: P) -> anyhow::Result<()> {
     std::fs::write(dest, attohttpc::get(url).send()?.text()?)?;
     Ok(())
