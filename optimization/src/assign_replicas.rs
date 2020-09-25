@@ -83,8 +83,6 @@ struct Opt {
     shard_loads: Option<PathBuf>,
 }
 
-// {"sharding":"random","ordering":"bp","shard_id":0,"query_id":50,"time":4427}
-
 #[derive(Debug, Clone, Copy, Deserialize)]
 struct QueryTime {
     shard_id: u64,
@@ -204,13 +202,13 @@ fn assign(opt: &Opt) -> Result<()> {
         read_shard_loads(opt.shard_loads.as_ref().unwrap())?
     };
     let mut builder = AssignmentBuilder::new(Dimension {
-        num_shards: 128,
+        num_shards: 123,
         num_machines: 20,
     });
     let progress_bar = ProgressBar::new_spinner();
     builder
         .loads(shard_loads.clone())
-        .replicas(repeat(3).take(128).collect())
+        .replicas(repeat(3).take(123).collect())
         .progress_bar(progress_bar);
     let mut rng = ChaChaRng::from_entropy();
     let (assignment, _) = builder.assign(
