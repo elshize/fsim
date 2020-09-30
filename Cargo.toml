@@ -4,4 +4,7 @@ members = [
     "setup",
     "optimization",
     "simulation",
+    "sim20",
+    "sim-derive",
+    "qrsim",
 ]

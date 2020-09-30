@@ -6,7 +6,7 @@ use std::time::Duration;
 /// Event scheduler. Stores any future events in a priority queue.
 pub struct Scheduler {
     /// Queue of the future events that will be processed in order of time.
-    scheduled_events: BinaryHeap<Reverse<Event>>,
+    scheduled_events: BinaryHeap<Reverse<Event<Process>>>,
 }
 
 impl Default for Scheduler {
@@ -38,7 +38,7 @@ impl Scheduler {
 
     /// Returns, and removes from the queue, the next event to be processed.
     #[must_use]
-    pub fn pop(&mut self) -> Option<Reverse<Event>> {
+    pub fn pop(&mut self) -> Option<Reverse<Event<Process>>> {
         self.scheduled_events.pop()
     }
 }

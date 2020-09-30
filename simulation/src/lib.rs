@@ -102,6 +102,8 @@ pub mod logger;
 mod progression;
 pub use progression::{FlushingProgression, Progression, ReversibleProgression};
 
+mod listener;
+
 /// A snapshot of a simulation at a specific time.
 pub trait Status {
     /// Current time.
@@ -213,9 +215,9 @@ struct NodeEntry<'a> {
 pub enum Effect<'a> {
     /// Simply schedules the event. A process that returns this effect will not be
     /// continued until someone else explicitly schedules it.
-    Schedule(Event),
+    Schedule(Event<Process>),
     /// Same as `Schedule` but schedules many events at once.
-    ScheduleMany(Vec<Event>),
+    ScheduleMany(Vec<Event<Process>>),
     /// Attempts to insert a query to the incoming queue, and schedules a given process
     /// if succeeded; otherwise, process must wait for empty slot in the queue until it
     /// is scheduled.

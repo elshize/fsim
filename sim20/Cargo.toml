@@ -1,0 +1,18 @@
+[package]
+name = "sim20"
+version = "0.1.0"
+authors = ["Michal Siedlaczek <michal.siedlaczek@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+rand = "0.7"
+rand_chacha = "0.2"
+rand_distr = "0.2"
+sim-derive = { path = "../sim-derive" }
+log = "0.4"
+
+[dev-dependencies]
+#proptest = "0.10"
+#testing = { path = "../testing" }
+#tempfile = "3.1"
+#float-cmp = "0.8"

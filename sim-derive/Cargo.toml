@@ -1,0 +1,22 @@
+[package]
+name = "sim-derive"
+version = "0.1.0"
+authors = ["Michal Siedlaczek <michal.siedlaczek@nyu.edu>"]
+description = "Derive macro for simulation"
+license = "Apache-2.0/MIT"
+readme = "README.md"
+keywords = ["derive", "simulation"]
+edition = "2018"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+quote = "1.0"
+syn = { version = "1.0", features = ["full"] }
+proc-macro2 = "1.0"
+
+[dev-dependencies]
+trybuild = "1.0"
+macrotest = "0.1"
+version-sync = "0.8"
