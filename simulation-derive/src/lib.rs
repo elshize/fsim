@@ -1,4 +1,21 @@
-//! `Simulation` derive macro implementation.
+//! A set of macros to define type-safe simulation implementation.
+//!
+//! # Motivation
+//!
+//! This crate addresses a specific problem occurring while trying to enforce compile-time type-safety
+//! when scheduling and handling events in a simulation. When scheduling, a function must be called
+//! with two parameters: event and component ID. The ID is generated and returned from the
+//! simulation object itself when registering a component. The ID is also marked with the event
+//! type, and the scheduling interface ensures that an event of a certain type can be only
+//! scheduled for a component that can handle that type of event. Internally, the scheduler erases
+//! the type of the event using [`std::any::Any`](https://doc.rust-lang.org/std/any/trait.Any.html).
+//!
+//! The problem starts when we find the next event to process and need to downcast it to the
+//! correct type. There are two options: either delegate passing the type of the event to the
+//! component itself (and fail on runtime if the type is incorrect), or to know all possible event
+//! types at compile-time and select the correct one, cast it, and pass to the component.
+//! This crate does the latter.
+//! ```
 
 #![warn(
     missing_docs,
@@ -9,7 +26,6 @@
 )]
 #![warn(clippy::all, clippy::pedantic)]
 #![allow(clippy::module_name_repetitions, clippy::default_trait_access)]
-#![doc(html_root_url = "https://docs.rs/id-derive/0.1.0")]
 
 extern crate proc_macro;
 
@@ -45,10 +61,10 @@ fn impl_add_component(ident: &Ident, event_trait: &Ident) -> syn::Result<TokenSt
         impl #ident {
             /// Adds a new component.
             #[must_use]
-            pub fn add_component<E: #event_trait + 'static, C: ::sim20::Component<Event = E> + 'static>(
+            pub fn add_component<E: #event_trait + 'static, C: ::simulation::Component<Event = E> + 'static>(
                 &mut self,
                 component: C,
-            ) -> ::sim20::ComponentId<E> {
+            ) -> ::simulation::ComponentId<E> {
                 self.components.add_component(component)
             }
         }
@@ -60,13 +76,13 @@ fn impl_add_queue(ident: &Ident) -> syn::Result<TokenStream> {
         impl #ident {
             /// Adds a new unbounded queue.
             #[must_use]
-            pub fn add_queue<V: 'static>(&mut self) -> ::sim20::QueueId<V> {
+            pub fn add_queue<V: 'static>(&mut self) -> ::simulation::QueueId<V> {
                 self.state.new_queue()
             }
 
             /// Adds a new bounded queue.
             #[must_use]
-            pub fn add_bounded_queue<V: 'static>(&mut self, capacity: usize) -> ::sim20::QueueId<V> {
+            pub fn add_bounded_queue<V: 'static>(&mut self, capacity: usize) -> ::simulation::QueueId<V> {
                 self.state.new_bounded_queue(capacity)
             }
         }
@@ -77,12 +93,12 @@ fn impl_default(sim: &Ident) -> syn::Result<TokenStream> {
     Ok(quote! {
         impl ::std::default::Default for #sim {
             fn default() -> Self {
-                let state = ::sim20::State::default();
-                let components = ::sim20::Components::new(&state);
+                let state = ::simulation::State::default();
+                let components = ::simulation::Components::new(&state);
                 Self {
                     state,
                     components,
-                    scheduler: ::sim20::Scheduler::default(),
+                    scheduler: ::simulation::Scheduler::default(),
                 }
             }
         }
@@ -96,7 +112,7 @@ fn impl_schedule(sim: &Ident, event_trait: &Ident) -> syn::Result<TokenStream> {
             pub fn schedule<E: #event_trait + 'static>(
                 &mut self,
                 time: ::std::time::Duration,
-                component: ::sim20::ComponentId<E>,
+                component: ::simulation::ComponentId<E>,
                 event: E
             ) {
                 self.scheduler.schedule(time, component, event);
@@ -206,7 +222,8 @@ impl syn::parse::Parse for Definitions {
     }
 }
 
-/// TODO
+/// Procedural macro in which the simulation struct should be defined.
+/// See the module-level documentation for more information.
 #[proc_macro]
 pub fn simulation(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(tokens as Definitions);

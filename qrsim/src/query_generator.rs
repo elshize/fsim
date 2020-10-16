@@ -1,7 +1,7 @@
 use crate::{BrokerEvent, QueryId, QueryLog, QueryRequest, RequestId};
 use rand::Rng;
 use rand_distr::Distribution;
-use sim20::{Component, ComponentId, Key, QueueId, Scheduler, State};
+use simulation::{Component, ComponentId, Key, QueueId, Scheduler, State};
 use std::convert::TryFrom;
 use std::time::Duration;
 

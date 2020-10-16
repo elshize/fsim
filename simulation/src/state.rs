@@ -17,7 +17,7 @@ use crate::Queue;
 /// Such operation will panic:
 ///
 /// ```should_fail
-/// # use sim20::{Key, State};
+/// # use simulation::{Key, State};
 /// let mut state_1 = State::default();
 /// let mut state_2 = State::default();
 /// let id = state_1.insert(1);
@@ -32,7 +32,7 @@ use crate::Queue;
 /// values of type `T` are stored internally.
 ///
 /// ```compile_fail
-/// # use sim20::{Key, State};
+/// # use simulation::{Key, State};
 /// let mut state = State::default();
 /// let id = state.insert(String::from("1"));
 /// let _: Option<i32> = state.remove(id);  // Error!

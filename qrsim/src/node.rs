@@ -3,7 +3,7 @@ use crate::{BrokerEvent, NodeId, NodeRequest, NodeResponse, Query};
 use std::rc::Rc;
 use std::time::Duration;
 
-use sim20::{Component, ComponentId, Key, QueueId, Scheduler, State};
+use simulation::{Component, ComponentId, Key, QueueId, Scheduler, State};
 
 /// Node events.
 #[derive(Debug, Copy, Clone)]

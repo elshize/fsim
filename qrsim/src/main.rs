@@ -7,7 +7,7 @@ use std::time::Duration;
 use eyre::WrapErr;
 use itertools::Itertools;
 use serde::Deserialize;
-use sim20::{ComponentId, Key, QueueId};
+use simulation::{ComponentId, Key, QueueId};
 
 use qrsim::{
     Broker, BrokerEvent, BrokerQueues, Dispatch, Node, NodeEvent, NodeId, NodeRequest,

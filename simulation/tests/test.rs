@@ -1,4 +1,4 @@
-use sim20::*;
+use simulation::*;
 
 #[derive(Debug, Copy, Clone)]
 struct EventA;

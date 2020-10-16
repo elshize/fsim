@@ -9,6 +9,7 @@ pub struct ComponentId<E> {
     pub(crate) state_hash: u64,
     pub(crate) _marker: PhantomData<E>,
 }
+
 impl<T> Clone for ComponentId<T> {
     fn clone(&self) -> Self {
         Self {
@@ -18,6 +19,7 @@ impl<T> Clone for ComponentId<T> {
         }
     }
 }
+
 impl<T> Copy for ComponentId<T> {}
 
 /// Interface of a simulation component.
@@ -56,6 +58,7 @@ impl Components {
             state_hash: state.state_hash,
         }
     }
+
     /// Returns a mutable reference for the given component.
     pub fn get_mut<E: 'static>(&mut self, id: ComponentId<E>) -> &mut dyn Component<Event = E> {
         assert_eq!(
@@ -67,6 +70,7 @@ impl Components {
             .unwrap()
             .as_mut()
     }
+
     /// Registers a new component and returns its ID.
     #[must_use]
     pub fn add_component<E: 'static, C: Component<Event = E> + 'static>(

@@ -1,10 +1,9 @@
 [package]
-name = "sim-derive"
+name = "simulation-derive"
 version = "0.1.0"
 authors = ["Michal Siedlaczek <michal.siedlaczek@nyu.edu>"]
 description = "Derive macro for simulation"
 license = "Apache-2.0/MIT"
-readme = "README.md"
 keywords = ["derive", "simulation"]
 edition = "2018"
 

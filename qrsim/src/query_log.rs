@@ -3,11 +3,11 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
 use std::time::Duration;
 
-use sim20::ClockRef;
+use simulation::ClockRef;
 
 use crate::{BrokerRequest, QueryRequest, QueryResponse, RequestId};
 
-/// Stores the log of queries.
+/// Stores the log of queries at different stages of simulation.
 pub struct QueryLog {
     generated: HashMap<RequestId, QueryRequest>,
     dropped: HashMap<RequestId, QueryRequest>,
@@ -16,6 +16,7 @@ pub struct QueryLog {
     recent: RefCell<BinaryHeap<(Reverse<Duration>, RequestId)>>,
     current_interval: Duration,
     clock: ClockRef,
+    fail_on_removing: bool,
 }
 
 impl QueryLog {
@@ -23,7 +24,9 @@ impl QueryLog {
     ///
     /// The value of `current_interval` determines how long into the past we will look to calculate
     /// the *current* throughput. The query log still stores all past queries, but the ones within
-    /// the interval are optimized for faster threshold computation.
+    /// the interval are optimized for faster throughput computation.
+    ///
+    /// `clock` is the reference to the simulation clock.
     #[must_use]
     pub fn new(clock: ClockRef, current_interval: Duration) -> Self {
         Self {
@@ -34,6 +37,7 @@ impl QueryLog {
             recent: RefCell::new(BinaryHeap::new()),
             current_interval,
             clock,
+            fail_on_removing: true,
         }
     }
 
@@ -67,14 +71,18 @@ impl QueryLog {
 
     /// Inserts a new query request.
     pub fn drop_request(&mut self, request: QueryRequest) {
-        self.generated.remove(&request.request_id());
+        if self.generated.remove(&request.request_id()).is_none() && self.fail_on_removing {
+            panic!("Tried to drop unknown request.");
+        }
         self.dropped.insert(request.request_id(), request);
     }
 
     /// Changes the query request from newly generated to dispatched.
     pub fn dispatch_request(&mut self, request: BrokerRequest) {
         let request_id = request.request_id();
-        self.generated.remove(&request_id);
+        if self.generated.remove(&request_id).is_none() && self.fail_on_removing {
+            panic!("Tried to dispatch unknown request.");
+        }
         self.dispatched.insert(request_id, request);
     }
 
@@ -82,12 +90,14 @@ impl QueryLog {
     pub fn finish(&mut self, response: QueryResponse) {
         let request_id = response.request_id();
         let generation_time = response.generation_time();
+        if self.dispatched.remove(&request_id).is_none() && self.fail_on_removing {
+            panic!("Tried to finish unknown request.");
+        }
         self.pop_old();
         self.responses.insert(request_id, response);
         self.recent
             .borrow_mut()
             .push((Reverse(generation_time), request_id));
-        self.dispatched.remove(&request_id).expect("XXX");
     }
 
     /// Returns the number of query requests that have been dropped.
@@ -111,11 +121,6 @@ impl QueryLog {
         self.responses.len()
     }
 
-    // /// Returns the number of queries that are currently dispatched to nodes.
-    // pub fn dispatched_requests(&self) -> usize {
-    //     self.dispatched.len()
-    // }
-
     fn pop_old(&self) {
         let mut recent = self.recent.borrow_mut();
         while let Some((Reverse(generation_time), _)) = recent.peek().copied() {
@@ -131,11 +136,12 @@ impl QueryLog {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::{BrokerRequest, QueryId, QueryRequest};
 
     use std::cell::Cell;
     use std::rc::Rc;
 
-    use crate::{BrokerRequest, QueryId, QueryRequest};
+    use rstest::{fixture, rstest};
 
     #[test]
     fn test_clock() {
@@ -161,10 +167,93 @@ mod test {
         )
     }
 
+    #[fixture]
+    fn log() -> QueryLog {
+        let clock = Rc::new(Cell::new(Duration::default()));
+        let log = QueryLog::new(clock.into(), Duration::from_secs(3));
+        log
+    }
+
+    #[rstest]
+    fn test_request_pipeline_dropped(mut log: QueryLog) {
+        let query_request =
+            QueryRequest::new(RequestId::from(0), QueryId::from(0), Duration::default());
+        log.new_request(query_request);
+        log.drop_request(query_request);
+    }
+
+    #[rstest]
+    fn test_request_pipeline_finished(mut log: QueryLog) {
+        assert_eq!(log.active_requests(), 0);
+        assert_eq!(log.dropped_requests(), 0);
+        assert_eq!(log.waiting_requests(), 0);
+        assert_eq!(log.finished_requests(), 0);
+
+        let query_request =
+            QueryRequest::new(RequestId::from(0), QueryId::from(0), Duration::default());
+        log.new_request(query_request);
+
+        assert_eq!(log.active_requests(), 0);
+        assert_eq!(log.dropped_requests(), 0);
+        assert_eq!(log.waiting_requests(), 1);
+        assert_eq!(log.finished_requests(), 0);
+
+        let broker_request = BrokerRequest::new(query_request, Duration::default());
+        log.dispatch_request(broker_request);
+
+        assert_eq!(log.active_requests(), 1);
+        assert_eq!(log.dropped_requests(), 0);
+        assert_eq!(log.waiting_requests(), 0);
+        assert_eq!(log.finished_requests(), 0);
+
+        let query_response = QueryResponse::new(
+            Rc::new(broker_request),
+            Vec::new(),
+            Vec::new(),
+            Duration::default(),
+        );
+        log.finish(query_response);
+
+        assert_eq!(log.active_requests(), 0);
+        assert_eq!(log.dropped_requests(), 0);
+        assert_eq!(log.waiting_requests(), 0);
+        assert_eq!(log.finished_requests(), 1);
+    }
+
+    mod fail_on_not_found {
+        use super::*;
+
+        #[rstest]
+        #[should_panic]
+        fn drop(mut log: QueryLog) {
+            log.drop_request(QueryRequest::new(
+                RequestId::from(0),
+                QueryId::from(0),
+                Duration::default(),
+            ));
+        }
+
+        #[rstest]
+        #[should_panic]
+        fn dispatch(mut log: QueryLog) {
+            log.dispatch_request(BrokerRequest::new(
+                QueryRequest::new(RequestId::from(0), QueryId::from(0), Duration::default()),
+                Duration::default(),
+            ));
+        }
+
+        #[rstest]
+        #[should_panic]
+        fn finish(mut log: QueryLog) {
+            log.finish(make_response(0, 0))
+        }
+    }
+
     #[test]
     fn test_threshold() {
         let clock = Rc::new(Cell::new(Duration::default()));
         let mut log = QueryLog::new(Rc::clone(&clock).into(), Duration::from_secs(3));
+        log.fail_on_removing = false;
         assert_eq!(log.total_throughput(), 0.0);
         log.finish(make_response(0, 0));
         clock.replace(Duration::from_secs(1));

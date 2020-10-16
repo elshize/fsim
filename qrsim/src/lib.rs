@@ -21,16 +21,7 @@ use delegate::delegate;
 use derive_more::{Display, From, Into};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
-use sim20::{simulation, Components, Key, Scheduler, State};
-
-// #[derive(Debug, Clone)]
-// pub struct Clock {
-//     time: Rc<Cell<Duration>>,
-// }
-
-// impl Clock {
-
-// }
+use simulation::{Components, Key, Scheduler, State};
 
 mod broker;
 pub use broker::{Broker, BrokerQueues, Event as BrokerEvent, ResponseStatus};
@@ -40,9 +31,6 @@ pub use query_generator::{Event as QueryGeneratorEvent, QueryGenerator};
 
 mod node;
 pub use node::{Event as NodeEvent, Node};
-
-// mod timeline;
-// pub use timeline::Timeline;
 
 mod query_log;
 pub use query_log::QueryLog;
@@ -415,7 +403,7 @@ pub trait Dispatch {
     fn num_nodes(&self) -> usize;
 }
 
-simulation! {
+simulation::simulation! {
     /// The trait implemented by all valid events.
     #[events(QueryGeneratorEvent, BrokerEvent, NodeEvent)]
     pub trait ValidEvent {}

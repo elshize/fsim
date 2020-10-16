@@ -7,7 +7,7 @@ use std::collections::{hash_map::Entry, HashMap};
 use std::rc::Rc;
 use std::time::Duration;
 
-use sim20::{Component, ComponentId, Key, QueueId, Scheduler, State};
+use simulation::{Component, ComponentId, Key, QueueId, Scheduler, State};
 
 /// Broker events.
 #[derive(Debug, Copy, Clone)]
