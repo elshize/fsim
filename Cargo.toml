@@ -8,3 +8,10 @@ members = [
     "sim-derive",
     "qrsim",
 ]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+lto = "thin"
+panic = "abort"

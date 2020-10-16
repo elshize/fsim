@@ -15,7 +15,7 @@ extern crate proc_macro;
 
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
-use syn::{parse_macro_input, parse_quote, parse_str, token, FieldsNamed, Ident, Type};
+use syn::{parse_macro_input, parse_quote, token, Ident, Item};
 
 macro_rules! handle {
     ($s:expr) => {
@@ -40,55 +40,16 @@ macro_rules! handle {
     }};
 }
 
-//#[proc_macro_derive(Simulation, attributes(events))]
-//pub fn simulation_derive(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
-//    let input = parse_macro_input!(tokens as DeriveInput);
-//    handle!(simulation_derive2(input))
-//}
-
-//fn simulation_derive2(input: DeriveInput) -> syn::Result<TokenStream> {
-//    let events = event_list(&input.attrs)?;
-//    if input.generics.lt_token.is_some() {
-//        return Err(syn::Error::new_spanned(
-//            input.generics,
-//            "Generic simulation wrapper structs are not supported at the moment.",
-//        ));
-//    }
-//    let mut tokens = impl_run(&events, &input.ident)?;
-//    tokens.extend(impl_add_component(&input.ident)?);
-//    tokens.extend(impl_enum_trait(&events)?);
-//    //tokens.extend(impl_new(&input.ident, &input.data)?);
-//    Ok(tokens)
-//}
-
-fn impl_enum_trait(events: &[syn::Path], bounding_trait: &Ident) -> syn::Result<TokenStream> {
-    let mut tokens = quote! {
-        pub trait #bounding_trait {}
-    };
-    for event in events {
-        tokens.extend(quote! {
-            impl ValidEvent for #event {}
-        });
-    }
-    Ok(tokens)
-}
-
-fn impl_add_component(ident: &Ident) -> syn::Result<TokenStream> {
+fn impl_add_component(ident: &Ident, event_trait: &Ident) -> syn::Result<TokenStream> {
     Ok(quote! {
         impl #ident {
+            /// Adds a new component.
             #[must_use]
-            pub fn add_component<E: ValidEvent + 'static, C: Component<Event = E> + 'static>(
+            pub fn add_component<E: #event_trait + 'static, C: ::sim20::Component<Event = E> + 'static>(
                 &mut self,
                 component: C,
-            ) -> ComponentId<E> {
-                let components = &mut self.components;
-                let id = components.len();
-                let component: Box<dyn Component<Event = E>> = Box::new(component);
-                components.push(Box::new(component));
-                ComponentId {
-                    id,
-                    _marker: PhantomData,
-                }
+            ) -> ::sim20::ComponentId<E> {
+                self.components.add_component(component)
             }
         }
     })
@@ -97,13 +58,15 @@ fn impl_add_component(ident: &Ident) -> syn::Result<TokenStream> {
 fn impl_add_queue(ident: &Ident) -> syn::Result<TokenStream> {
     Ok(quote! {
         impl #ident {
+            /// Adds a new unbounded queue.
             #[must_use]
-            pub fn add_queue<V: 'static>(&mut self) -> QueueId<V> {
+            pub fn add_queue<V: 'static>(&mut self) -> ::sim20::QueueId<V> {
                 self.state.new_queue()
             }
 
+            /// Adds a new bounded queue.
             #[must_use]
-            pub fn add_bounded_queue<V: 'static>(&mut self, capacity: usize) -> QueueId<V> {
+            pub fn add_bounded_queue<V: 'static>(&mut self, capacity: usize) -> ::sim20::QueueId<V> {
                 self.state.new_bounded_queue(capacity)
             }
         }
@@ -114,26 +77,78 @@ fn impl_default(sim: &Ident) -> syn::Result<TokenStream> {
     Ok(quote! {
         impl ::std::default::Default for #sim {
             fn default() -> Self {
+                let state = ::sim20::State::default();
+                let components = ::sim20::Components::new(&state);
                 Self {
-                    state: State::default(),
-                    scheduler: Scheduler::default(),
-                    components: Vec::default(),
+                    state,
+                    components,
+                    scheduler: ::sim20::Scheduler::default(),
                 }
             }
         }
     })
 }
 
-fn impl_schedule(sim: &Ident) -> syn::Result<TokenStream> {
+fn impl_schedule(sim: &Ident, event_trait: &Ident) -> syn::Result<TokenStream> {
     Ok(quote! {
         impl #sim {
-            pub fn schedule<E: 'static>(
+            /// Schedules a new event to be executed at time `time` in component `component`.
+            pub fn schedule<E: #event_trait + 'static>(
                 &mut self,
-                time: Duration,
-                component: ComponentId<E>,
+                time: ::std::time::Duration,
+                component: ::sim20::ComponentId<E>,
                 event: E
             ) {
                 self.scheduler.schedule(time, component, event);
+            }
+        }
+    })
+}
+
+fn impl_step(events: &[syn::Path], ident: &Ident) -> syn::Result<TokenStream> {
+    let mut expr_iter = events
+        .iter()
+        .map(|e| {
+            let expr: syn::ExprIf = parse_quote! {
+                if let Some(event) = event.downcast::<#e>() {
+                    let component = self.components.get_mut::<#e>(event.component_id);
+                    log::trace!("[{:?}] [event] {:?}", self.scheduler.time(), event);
+                    component.process_event(
+                        event.component_id,
+                        event.event,
+                        &mut self.scheduler,
+                        &mut self.state
+                    );
+                }
+            };
+            expr
+        })
+        .rev();
+    let mut first = expr_iter
+        .next()
+        .expect("Must be at least one or else parsing would fail.");
+    first.else_branch = Some((
+        token::Else::default(),
+        Box::new(parse_quote! {
+            panic!("Invalid event. This means a bug in the macro code.")
+        }),
+    ));
+    let ifexpr = expr_iter.fold(first, |acc, mut expr| {
+        expr.else_branch = Some((token::Else::default(), Box::new(syn::Expr::If(acc))));
+        expr
+    });
+    Ok(quote! {
+        impl #ident {
+            /// Performs one step of the simulation. Returns `true` if there was in fact an event
+            /// available to process, and `false` instead, which signifies that the simulation
+            /// ended.
+            pub fn step(&mut self) -> bool {
+                if let Some(mut event) = self.scheduler.pop() {
+                    #ifexpr
+                    true
+                } else {
+                    false
+                }
             }
         }
     })
@@ -144,19 +159,11 @@ fn impl_run(events: &[syn::Path], ident: &Ident) -> syn::Result<TokenStream> {
         .iter()
         .map(|e| {
             let expr: syn::ExprIf = parse_quote! {
-                if type_id == ::std::any::TypeId::of::<#e>() {
-                    let component = self
-                        .components[event.component]
-                        .downcast_mut::<Box<dyn Component<Event = #e>>>()
-                        .expect("HERE");
-                    let component_id = ComponentId {
-                        id: event.component,
-                        _marker: ::std::marker::PhantomData,
-                    };
-                    let event = event.inner.downcast_mut::<#e>().unwrap();
+                if let Some(event) = event.downcast::<#e>() {
+                    let component = self.components.get_mut::<#e>(event.component_id);
                     component.process_event(
-                        component_id,
-                        event,
+                        event.component_id,
+                        event.event,
                         &mut self.scheduler,
                         &mut self.state
                     );
@@ -174,9 +181,10 @@ fn impl_run(events: &[syn::Path], ident: &Ident) -> syn::Result<TokenStream> {
     });
     Ok(quote! {
         impl #ident {
+            /// Runs the entire simulation from start to end.
+            /// This function might not terminate if the end condition is not satisfied.
             pub fn run(&mut self) {
                 while let Some(mut event) = self.scheduler.pop() {
-                    let type_id = event.event_type;
                     #ifexpr
                 }
             }
@@ -184,162 +192,205 @@ fn impl_run(events: &[syn::Path], ident: &Ident) -> syn::Result<TokenStream> {
     })
 }
 
-// fn event_list(attrs: &[syn::Attribute]) -> syn::Result<Vec<syn::Path>> {
-//     let mut events = attrs.iter().filter_map(|attr| {
-//         if attr.style != syn::AttrStyle::Outer {
-//             return None;
-//         }
-//         let pat: syn::Path = parse_str("events").unwrap();
-//         if attr.path != pat {
-//             return None;
-//         }
-//         Some(attr)
-//     });
-//     if let Some(attr) = events.next() {
-//         match attr.parse_meta()? {
-//             syn::Meta::Path(path) => {
-//                 Err(syn::Error::new_spanned(path, "Expected a list of types."))
-//             }
-//             syn::Meta::NameValue(value) => {
-//                 Err(syn::Error::new_spanned(value, "Expected a list of types."))
-//             }
-//             syn::Meta::List(list) if list.nested.is_empty() => Err(syn::Error::new_spanned(
-//                 list,
-//                 "Expected a non-empty list of types.",
-//             )),
-//             syn::Meta::List(paths) => {
-//                 let paths: syn::Result<Vec<_>> = paths
-//                     .nested
-//                     .iter()
-//                     .map(|m| match m {
-//                         syn::NestedMeta::Lit(lit) => {
-//                             Err(syn::Error::new_spanned(lit, "Expected a type path."))
-//                         }
-//                         syn::NestedMeta::Meta(syn::Meta::Path(path)) => Ok(path.clone()),
-//                         _ => unreachable!(),
-//                     })
-//                     .collect();
-//                 if let Some(attr) = events.next() {
-//                     Err(syn::Error::new_spanned(
-//                         attr,
-//                         "Attribute events can be defined only once.",
-//                     ))
-//                 } else {
-//                     Ok(paths?)
-//                 }
-//             }
-//         }
-//     } else {
-//         Err(syn::Error::new(
-//             Span::call_site(),
-//             "Simulation structure must define events attribute.",
-//         ))
-//     }
-// }
-
-struct Simulation {
-    name: Ident,
-    events: Vec<syn::Path>,
-    bounding_trait: Ident,
+struct Definitions {
+    items: Vec<Item>,
 }
 
-fn get_path_or(error: &str, ty: Type) -> syn::Result<syn::Path> {
-    match ty {
-        Type::Path(syn::TypePath { qself: None, path }) => Ok(path),
-        ty => Err(syn::Error::new_spanned(ty, error)),
-    }
-}
-
-impl syn::parse::Parse for Simulation {
+impl syn::parse::Parse for Definitions {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        let name: Ident = input.parse()?;
-        let fields: FieldsNamed = input.parse()?;
-
-        let events: Ident = parse_str("events")?;
-        let bounding_trait: Ident = parse_str("bounding_trait")?;
-
-        let mut valid_fields: std::collections::HashMap<Ident, Option<Type>> =
-            vec![(events.clone(), None), (bounding_trait.clone(), None)]
-                .into_iter()
-                .collect();
-        for f in fields.named {
-            let ident = &f.ident.unwrap();
-            if let Some(visited) = valid_fields.get_mut(ident) {
-                if visited.is_some() {
-                    return Err(syn::Error::new_spanned(ident, "Duplicated field."));
-                } else {
-                    *visited = Some(f.ty);
-                }
-            } else {
-                return Err(syn::Error::new_spanned(
-                    ident,
-                    "Invalid field. Expected one of: name, events, bounding_trait, timeline",
-                ));
-            }
+        let mut items = Vec::new();
+        while !input.is_empty() {
+            items.push(input.parse()?);
         }
-        let event_tuple: syn::TypeTuple = match valid_fields
-            .remove(&events)
-            .flatten()
-            .ok_or_else(|| syn::Error::new(Span::call_site(), "Missing field: events."))?
-        {
-            Type::Tuple(tuple) => Ok(tuple),
-            ty => Err(syn::Error::new_spanned(
-                ty,
-                "Event list must be represented as a tuple type.",
-            )),
-        }?;
-        let bounding_trait: Ident = get_path_or(
-            "Must be identifier.",
-            valid_fields
-                .remove(&bounding_trait)
-                .flatten()
-                .ok_or_else(|| {
-                    syn::Error::new(Span::call_site(), "Missing field: bounding_trait.")
-                })?,
-        )
-        .and_then(|path| {
-            if let Some(id) = path.get_ident() {
-                Ok(id.clone())
-            } else {
-                Err(syn::Error::new_spanned(
-                    path,
-                    "Bounding trait must be an identifier.",
-                ))
-            }
-        })?;
-        Ok(Simulation {
-            name,
-            events: event_tuple
-                .elems
-                .into_iter()
-                .map(|ty| get_path_or("Must be a type path.", ty))
-                .collect::<syn::Result<Vec<_>>>()?,
-            bounding_trait,
-        })
+        Ok(Definitions { items })
     }
 }
 
-fn impl_sim_struct(sim: &Ident) -> syn::Result<TokenStream> {
-    Ok(quote! {
-        pub struct #sim {
-            state: State,
-            scheduler: Scheduler,
-            components: Vec<Box<dyn Any>>,
-        }
-    })
+/// TODO
+#[proc_macro]
+pub fn simulation(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input = parse_macro_input!(tokens as Definitions);
+    handle!(process_definitions(input))
 }
 
-/// Defines a type-safe simulation structure.
-#[proc_macro]
-pub fn define_simulation(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let input = parse_macro_input!(tokens as Simulation);
-    handle!(
-        impl_sim_struct(&input.name),
-        impl_default(&input.name),
-        impl_schedule(&input.name),
-        impl_run(&input.events, &input.name),
-        impl_enum_trait(&input.events, &input.bounding_trait),
-        impl_add_component(&input.name),
-        impl_add_queue(&input.name)
-    )
+fn find_definitions(input: &Definitions) -> syn::Result<((usize, usize), (usize, usize))> {
+    let mut event_trait_idx: Option<(usize, usize)> = None;
+    let mut sim_struct_idx: Option<(usize, usize)> = None;
+    for (idx, item) in input.items.iter().enumerate() {
+        match item {
+            Item::Trait(trait_definition) => {
+                let mut events = trait_definition
+                    .attrs
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, attr)| {
+                        attr.path.get_ident() == Some(&Ident::new("events", Span::call_site()))
+                    });
+                if let Some((attr_idx, event_attr)) = events.next() {
+                    if event_trait_idx.is_some() {
+                        return Err(syn::Error::new_spanned(
+                            event_attr,
+                            "Duplicated event attribute.",
+                        ));
+                    }
+                    event_trait_idx = Some((idx, attr_idx));
+                }
+                if let Some((_, event_attr)) = events.next() {
+                    return Err(syn::Error::new_spanned(
+                        event_attr,
+                        "Duplicated event attribute.",
+                    ));
+                }
+            }
+            Item::Struct(struct_definition) => {
+                let mut sim = struct_definition
+                    .attrs
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, attr)| {
+                        attr.path.get_ident() == Some(&Ident::new("simulation", Span::call_site()))
+                    });
+                if let Some((attr_idx, attr)) = sim.next() {
+                    if sim_struct_idx.is_some() {
+                        return Err(syn::Error::new_spanned(
+                            attr,
+                            "Duplicated simulation attribute.",
+                        ));
+                    }
+                    sim_struct_idx = Some((idx, attr_idx));
+                }
+                if let Some((_, attr)) = sim.next() {
+                    return Err(syn::Error::new_spanned(
+                        attr,
+                        "Duplicated simulation attribute.",
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    match (event_trait_idx, sim_struct_idx) {
+        (None, _) => Err(syn::Error::new(
+            Span::call_site(),
+            "Must define the valid event trait with `events` attribute.",
+        )),
+        (_, None) => Err(syn::Error::new(
+            Span::call_site(),
+            "Must define simulation struct with `simulation` attribute.",
+        )),
+        (Some(e), Some(s)) => Ok((e, s)),
+    }
+}
+
+fn parse_events(
+    item: Item,
+    attr_idx: usize,
+) -> syn::Result<(Ident, Vec<syn::Path>, syn::ItemTrait)> {
+    match item {
+        Item::Trait(mut def) => {
+            let attr = def.attrs[attr_idx].clone();
+            let trait_path = def.ident.clone();
+            let meta = attr.parse_meta()?;
+            let event_paths: Vec<_> = match meta {
+                syn::Meta::List(syn::MetaList { nested, .. }) => {
+                    let paths: syn::Result<Vec<_>> = nested
+                        .into_iter()
+                        .map(|m| match m {
+                            syn::NestedMeta::Meta(syn::Meta::Path(path)) => Ok(path),
+                            _ => Err(syn::Error::new_spanned(
+                                m,
+                                "Events must be a list of types.",
+                            )),
+                        })
+                        .collect();
+                    paths?
+                }
+                other => {
+                    return Err(syn::Error::new_spanned(
+                        other,
+                        "Events must be a list of types.",
+                    ));
+                }
+            };
+            def.attrs = def
+                .attrs
+                .into_iter()
+                .enumerate()
+                .filter_map(
+                    |(idx, attr)| {
+                        if idx == attr_idx {
+                            None
+                        } else {
+                            Some(attr)
+                        }
+                    },
+                )
+                .collect();
+            Ok((trait_path, event_paths, def))
+        }
+        _ => unreachable!(),
+    }
+}
+
+fn parse_struct(item: Item, attr_idx: usize) -> syn::Result<(Ident, syn::ItemStruct)> {
+    match item {
+        Item::Struct(mut def) => {
+            def.attrs = def
+                .attrs
+                .into_iter()
+                .enumerate()
+                .filter_map(
+                    |(idx, attr)| {
+                        if idx == attr_idx {
+                            None
+                        } else {
+                            Some(attr)
+                        }
+                    },
+                )
+                .collect();
+            Ok((def.ident.clone(), def))
+        }
+        _ => unreachable!(),
+    }
+}
+
+fn impl_event_trait(events: &[syn::Path], bounding_trait: &Ident) -> syn::Result<TokenStream> {
+    let mut tokens = TokenStream::new();
+    for event in events {
+        tokens.extend(quote! {
+            impl #bounding_trait for #event {}
+        });
+    }
+    Ok(tokens)
+}
+
+fn process_definitions(input: Definitions) -> syn::Result<TokenStream> {
+    let ((events_idx, events_attr_idx), (sim_idx, sim_attr_idx)) = find_definitions(&input)?;
+    let mut output = TokenStream::new();
+    let mut event_trait = Ident::new("dummy", Span::call_site());
+    let mut events: Vec<syn::Path> = Vec::new();
+    let mut sim_ident = Ident::new("dummy", Span::call_site());
+    for (idx, item) in input.items.into_iter().enumerate() {
+        if idx == events_idx {
+            let (event_trait_ident, event_list, trait_def) = parse_events(item, events_attr_idx)?;
+            output.extend(quote! {#trait_def});
+            output.extend(impl_event_trait(&event_list, &event_trait_ident)?);
+            event_trait = event_trait_ident;
+            events = event_list;
+        } else if idx == sim_idx {
+            let (sim, sim_struct) = parse_struct(item, sim_attr_idx)?;
+            output.extend(quote! { #sim_struct });
+            sim_ident = sim;
+        } else {
+            output.extend(quote! { #item });
+        }
+    }
+    output.extend(impl_default(&sim_ident)?);
+    output.extend(impl_run(&events, &sim_ident));
+    output.extend(impl_schedule(&sim_ident, &event_trait));
+    output.extend(impl_step(&events, &sim_ident));
+    output.extend(impl_add_component(&sim_ident, &event_trait));
+    output.extend(impl_add_queue(&sim_ident));
+    Ok(output)
 }

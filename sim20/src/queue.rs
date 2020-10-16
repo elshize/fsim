@@ -6,19 +6,6 @@ use std::collections::VecDeque;
 ///
 /// [`VecDeque`]: https://doc.rust-lang.org/std/collections/struct.VecDeque.html
 /// [`usize::MAX`]: https://doc.rust-lang.org/std/primitive.usize.html#associatedconstant.MAX
-///
-/// # Examples
-///
-/// ```
-/// # use sim20::Queue;
-///
-/// let mut queue: Queue<i32> = Queue::default();
-/// assert!(queue.push_back(1).is_ok()); // Always succeeds
-///
-/// let mut queue: Queue<i32> = Queue::bounded(2);
-/// assert!(queue.push_back(1).is_ok());
-/// assert!(queue.push_back(2).is_ok());
-/// assert!(queue.push_back(3).is_err());
 /// ```
 pub struct Queue<T> {
     inner: VecDeque<T>,
@@ -61,5 +48,45 @@ impl<T> Queue<T> {
     /// Returns the number of elements in the `Queue`.
     pub fn len(&self) -> usize {
         self.inner.len()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_unbounded_queue() {
+        let mut queue = Queue::<i32>::default();
+        assert_eq!(queue.len(), 0);
+        assert!(queue.push_back(0).is_ok());
+        assert_eq!(queue.len(), 1);
+        assert!(queue.push_back(1).is_ok());
+        assert_eq!(queue.len(), 2);
+        assert_eq!(queue.pop_front(), Some(0));
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue.pop_front(), Some(1));
+        assert_eq!(queue.len(), 0);
+        assert_eq!(queue.pop_front(), None);
+    }
+
+    #[test]
+    fn test_bounded_queue() {
+        let mut queue = Queue::<i32>::bounded(2);
+        assert_eq!(queue.len(), 0);
+        assert!(queue.push_back(0).is_ok());
+        assert_eq!(queue.len(), 1);
+        assert!(queue.push_back(1).is_ok());
+        assert_eq!(queue.len(), 2);
+        assert!(queue.push_back(2).is_err());
+        assert_eq!(queue.pop_front(), Some(0));
+        assert_eq!(queue.len(), 1);
+        assert!(queue.push_back(2).is_ok());
+        assert_eq!(queue.len(), 2);
+        assert_eq!(queue.pop_front(), Some(1));
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue.pop_front(), Some(2));
+        assert_eq!(queue.len(), 0);
+        assert_eq!(queue.pop_front(), None);
     }
 }

@@ -38,32 +38,50 @@ use crate::Queue;
 /// let _: Option<i32> = state.remove(id);  // Error!
 /// let _ = state.remove::<i32>(id);        // Error!
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Key<V> {
     id: usize,
     state_hash: u64,
     _marker: PhantomData<V>,
 }
 
-impl<T: Clone> Copy for Key<T> {}
+impl<T> Clone for Key<T> {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            state_hash: self.state_hash,
+            _marker: PhantomData,
+        }
+    }
+}
+impl<T> Copy for Key<T> {}
 
 /// A type-safe identifier of a queue.
 ///
 /// This is an analogue of [`Key<T>`](struct.Key.html) used specifically for queues.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct QueueId<V> {
     id: usize,
     state_hash: u64,
     _marker: PhantomData<V>,
 }
-impl<T: Clone> Copy for QueueId<T> {}
+impl<T> Clone for QueueId<T> {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            state_hash: self.state_hash,
+            _marker: PhantomData,
+        }
+    }
+}
+impl<T> Copy for QueueId<T> {}
 
 /// State of a simulation holding all queues and arbitrary values in a store value.
 pub struct State {
     store: HashMap<TypeId, HashMap<usize, Box<dyn Any>>>,
     queues: HashMap<TypeId, HashMap<usize, Box<dyn Any>>>,
     next_id: usize,
-    state_hash: u64,
+    pub(crate) state_hash: u64,
 }
 
 impl Default for State {
@@ -78,6 +96,12 @@ impl Default for State {
 }
 
 impl State {
+    fn assert_hash<V: 'static>(&self, key: &Key<V>) {
+        assert_eq!(
+            key.state_hash, self.state_hash,
+            "State hash of the key does not match the hash of the state"
+        );
+    }
     /// Inserts an arbitrary value to the value store. Learn more in the documentation for [`Key`].
     #[must_use = "Discarding key results in leaking inserted value"]
     pub fn insert<V: 'static>(&mut self, value: V) -> Key<V> {
@@ -96,13 +120,30 @@ impl State {
 
     /// Removes a value of type `V` from the value store. Learn more in the documentation for [`Key`].
     pub fn remove<V: 'static>(&mut self, key: Key<V>) -> Option<V> {
-        assert_eq!(
-            key.state_hash, self.state_hash,
-            "State hash of the key does not match the hash of the state"
-        );
+        self.assert_hash(&key);
         self.store
             .get_mut(&TypeId::of::<V>())
             .and_then(|m| m.remove(&key.id).map(|v| *v.downcast::<V>().unwrap()))
+    }
+
+    /// Gets a immutable reference to a value of a type `V` from the value store.
+    /// Learn more in the documentation for [`Key`].
+    #[must_use]
+    pub fn get<V: 'static>(&mut self, key: Key<V>) -> Option<&V> {
+        self.assert_hash(&key);
+        self.store
+            .get(&TypeId::of::<V>())
+            .and_then(|m| m.get(&key.id).map(|v| v.downcast_ref::<V>().unwrap()))
+    }
+
+    /// Gets a mutable reference to a value of a type `V` from the value store.
+    /// Learn more in the documentation for [`Key`].
+    #[must_use]
+    pub fn get_mut<V: 'static>(&mut self, key: Key<V>) -> Option<&mut V> {
+        self.assert_hash(&key);
+        self.store
+            .get_mut(&TypeId::of::<V>())
+            .and_then(|m| m.get_mut(&key.id).map(|v| v.downcast_mut::<V>().unwrap()))
     }
 
     /// Creates a new unbounded queue, returning its ID.
@@ -135,8 +176,12 @@ impl State {
         }
     }
 
-    /// Sends `value` to the `queue`. It returns an error if the queue is full.
+    /// Sends `value` to the `queue`.
+    ///
+    /// # Errors
+    /// It returns an error if the queue is full.
     pub fn send<V: 'static>(&mut self, queue: QueueId<V>, value: V) -> Result<(), ()> {
+        assert_eq!(self.state_hash, queue.state_hash, "State hash mismatch.");
         self.queues
             .get_mut(&TypeId::of::<V>())
             .expect("If queue ID was issued for this type, it must exist")
@@ -149,6 +194,7 @@ impl State {
 
     /// Pops the first value from the `queue`. It returns `None` if  the queue is empty.
     pub fn recv<V: 'static>(&mut self, queue: QueueId<V>) -> Option<V> {
+        assert_eq!(self.state_hash, queue.state_hash, "State hash mismatch.");
         self.queues
             .get_mut(&TypeId::of::<V>())
             .expect("If queue ID was issued for this type, it must exist")
@@ -157,5 +203,71 @@ impl State {
             .downcast_mut::<Queue<V>>()
             .unwrap()
             .pop_front()
+    }
+
+    /// Checks the number of elements in the queue.
+    pub fn len<V: 'static>(&mut self, queue: QueueId<V>) -> usize {
+        assert_eq!(self.state_hash, queue.state_hash, "State hash mismatch.");
+        self.queues
+            .get(&TypeId::of::<V>())
+            .expect("If queue ID was issued for this type, it must exist")
+            .get(&queue.id)
+            .expect("If this queue ID was issued, a corresponding queue must exist")
+            .downcast_ref::<Queue<V>>()
+            .unwrap()
+            .len()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_add_remove_key_values() {
+        let mut state = State::default();
+
+        let id = state.insert(1);
+        assert_eq!(state.remove(id), Some(1));
+        assert_eq!(state.remove(id), None);
+
+        let id = state.insert("string_slice");
+        assert_eq!(state.remove(id), Some("string_slice"));
+        assert_eq!(state.remove(id), None);
+
+        let id = state.insert(vec![String::from("S")]);
+        assert_eq!(state.remove(id), Some(vec![String::from("S")]));
+        assert_eq!(state.remove(id), None);
+    }
+
+    #[test]
+    fn test_bounded_queue() {
+        let mut state = State::default();
+        let qid = state.new_bounded_queue::<&str>(2);
+        assert_eq!(state.len(qid), 0);
+
+        assert!(state.send(qid, "A").is_ok());
+        assert!(state.send(qid, "B").is_ok());
+        assert!(state.send(qid, "C").is_err());
+
+        assert_eq!(state.recv(qid), Some("A"));
+        assert_eq!(state.recv(qid), Some("B"));
+        assert_eq!(state.recv(qid), None);
+    }
+
+    #[test]
+    fn test_unbounded_queue() {
+        let mut state = State::default();
+        let qid = state.new_queue::<&str>();
+        assert_eq!(state.len(qid), 0);
+
+        assert!(state.send(qid, "A").is_ok());
+        assert!(state.send(qid, "B").is_ok());
+        assert!(state.send(qid, "C").is_ok());
+
+        assert_eq!(state.recv(qid), Some("A"));
+        assert_eq!(state.recv(qid), Some("B"));
+        assert_eq!(state.recv(qid), Some("C"));
+        assert_eq!(state.recv(qid), None);
     }
 }
