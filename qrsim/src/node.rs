@@ -1,9 +1,10 @@
 use crate::{BrokerEvent, NodeId, NodeRequest, NodeResponse, Query};
 
+use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use simulation::{Component, ComponentId, Key, QueueId, Scheduler, State};
+use simrs::{Component, ComponentId, Key, QueueId, Scheduler, State};
 
 /// Node events.
 #[derive(Debug, Copy, Clone)]
@@ -33,7 +34,7 @@ pub struct Node {
     queries: Rc<Vec<Query>>,
     incoming: QueueId<(NodeRequest, ComponentId<BrokerEvent>)>,
     outgoing: QueueId<NodeResponse>,
-    idle_cores: usize,
+    idle_cores: Cell<usize>,
 }
 
 impl Node {
@@ -44,14 +45,14 @@ impl Node {
         queries: Rc<Vec<Query>>,
         incoming: QueueId<(NodeRequest, ComponentId<BrokerEvent>)>,
         outgoing: QueueId<NodeResponse>,
-        idle_cores: usize,
+        num_cores: usize,
     ) -> Self {
         Self {
             id,
             queries,
             incoming,
             outgoing,
-            idle_cores,
+            idle_cores: Cell::new(num_cores),
         }
     }
 }
@@ -60,7 +61,7 @@ impl Component for Node {
     type Event = Event;
 
     fn process_event(
-        &mut self,
+        &self,
         self_id: ComponentId<Self::Event>,
         event: &Self::Event,
         scheduler: &mut Scheduler,
@@ -69,8 +70,9 @@ impl Component for Node {
         match event {
             Event::Idle | Event::NewRequest => {
                 log::trace!("Node is idle");
-                if self.idle_cores > 0 {
-                    self.idle_cores -= 1;
+                let idle_cores = self.idle_cores.get();
+                if idle_cores > 0 {
+                    self.idle_cores.replace(idle_cores - 1);
                     if let Some((request, broker)) = state.recv(self.incoming) {
                         log::debug!(
                             "Node {} picked up request {}",
@@ -89,7 +91,7 @@ impl Component for Node {
                             },
                         );
                     } else {
-                        self.idle_cores += 1;
+                        self.idle_cores.replace(idle_cores);
                     }
                 }
             }
@@ -112,7 +114,8 @@ impl Component for Node {
                 };
                 scheduler.schedule_immediately(*broker, BrokerEvent::Response);
                 scheduler.schedule_immediately(self_id, Event::Idle);
-                self.idle_cores += 1;
+                let idle_cores = self.idle_cores.get();
+                self.idle_cores.replace(idle_cores + 1);
             }
         }
     }

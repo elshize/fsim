@@ -21,7 +21,7 @@ use delegate::delegate;
 use derive_more::{Display, From, Into};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
-use simulation::{Components, Key, Scheduler, State};
+use simrs::{Key, Simulation};
 
 mod broker;
 pub use broker::{Broker, BrokerQueues, Event as BrokerEvent, ResponseStatus};
@@ -396,42 +396,28 @@ impl QueryResponse {
 /// Implementors are dispatch policies that select nodes for requested shards.
 pub trait Dispatch {
     /// Selects a node for each requested shard.
-    fn dispatch(&mut self, shards: &[ShardId]) -> Vec<(ShardId, NodeId)>;
+    fn dispatch(&self, shards: &[ShardId]) -> Vec<(ShardId, NodeId)>;
     /// Total number of existing shards.
     fn num_shards(&self) -> usize;
     /// Total number of existing nodes.
     fn num_nodes(&self) -> usize;
 }
 
-simulation::simulation! {
-    /// The trait implemented by all valid events.
-    #[events(QueryGeneratorEvent, BrokerEvent, NodeEvent)]
-    pub trait ValidEvent {}
-
-    /// The main simulation object.
-    #[simulation]
-    pub struct Simulation {
-        /// Current state of the simulation meant to be mutated by the components.
-        pub state: State,
-        /// Schedules events and maintains the clock.
-        pub scheduler: Scheduler,
-        components: Components,
-    }
-}
-
-impl Simulation {
-    /// Runs for the specified time, and exits afterwards.
-    pub fn run_until(&mut self, time: Duration, key: Key<QueryLog>) -> Duration {
-        let pb = ProgressBar::new(time.as_secs())
-            .with_style(ProgressStyle::default_bar().template("{msg} {wide_bar} {percent}%"));
-        while self.scheduler.time() < time {
-            let end = !self.step();
-            let time = self.scheduler.time();
-            let query_log = self.state.get(key).expect("Missing query log in state");
-            let secs = time.as_secs();
-            if pb.position() < secs {
-                pb.set_position(secs);
-                pb.set_message(&format!(
+/// Runs for the specified time, and exits afterwards.
+pub fn run_until(simulation: &mut Simulation, time: Duration, key: Key<QueryLog>) -> Duration {
+    let pb = ProgressBar::new(time.as_secs())
+        .with_style(ProgressStyle::default_bar().template("{msg} {wide_bar} {percent}%"));
+    while simulation.scheduler.time() < time {
+        let end = !simulation.step();
+        let time = simulation.scheduler.time();
+        let query_log = simulation
+            .state
+            .get(key)
+            .expect("Missing query log in state");
+        let secs = time.as_secs();
+        if pb.position() < secs {
+            pb.set_position(secs);
+            pb.set_message(&format!(
                     "[{time}s] [W={waiting}] [A={active}] [X={dropped}] [F={finished}] [CT={current}] [TT={total}]",
                     time = time.as_secs(),
                     active = query_log.active_requests(),
@@ -441,13 +427,12 @@ impl Simulation {
                     current = query_log.current_throughput().round(),
                     total = query_log.total_throughput().round(),
                 ));
-            }
-            if end {
-                pb.finish();
-                return time;
-            }
         }
-        pb.finish();
-        time
+        if end {
+            pb.finish();
+            return time;
+        }
     }
+    pb.finish();
+    time
 }

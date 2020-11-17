@@ -1,7 +1,8 @@
 use crate::{BrokerEvent, QueryId, QueryLog, QueryRequest, RequestId};
 use rand::Rng;
 use rand_distr::Distribution;
-use simulation::{Component, ComponentId, Key, QueueId, Scheduler, State};
+use simrs::{Component, ComponentId, Key, QueueId, Scheduler, State};
+use std::cell::{Cell, RefCell};
 use std::convert::TryFrom;
 use std::time::Duration;
 
@@ -21,10 +22,10 @@ where
     T: Distribution<f32>,
     Q: Distribution<usize>,
 {
-    rng: R,
+    rng: RefCell<R>,
     time_dist: T,
     query_dist: Q,
-    counter: usize,
+    counter: Cell<usize>,
     query_entry_queue: QueueId<QueryRequest>,
     broker: ComponentId<BrokerEvent>,
     // generated_query_listener: Option<Box<dyn Fn(&QueryRequest) -> ()>>,
@@ -40,7 +41,7 @@ where
     type Event = Event;
 
     fn process_event(
-        &mut self,
+        &self,
         self_id: ComponentId<Self::Event>,
         event: &Self::Event,
         scheduler: &mut Scheduler,
@@ -49,9 +50,11 @@ where
         match event {
             Event::GenerateQuery => {
                 let request = self.generate_request(scheduler.time());
-                // if let Some(listener) = &self.generated_query_listener {
-                //     listener(&request);
-                // }
+                log::info!("Generated query at {:?}", scheduler.time());
+                state
+                    .get_mut(self.query_log_key)
+                    .expect("Query log not found in state")
+                    .new_request(request);
                 if state.send(self.query_entry_queue, request).is_err() {
                     log::warn!(
                         "[{:?}] Request {} was dropped",
@@ -62,12 +65,6 @@ where
                         .get_mut(self.query_log_key)
                         .expect("Query log not found in state")
                         .drop_request(request);
-                } else {
-                    log::info!("Generated query at {:?}", scheduler.time());
-                    state
-                        .get_mut(self.query_log_key)
-                        .expect("Query log not found in state")
-                        .new_request(request);
                 }
                 scheduler.schedule(
                     Duration::from_micros(self.next_interval()),
@@ -98,31 +95,25 @@ where
         query_log_key: Key<QueryLog>,
     ) -> Self {
         Self {
-            rng,
+            rng: RefCell::new(rng),
             time_dist,
             query_dist,
-            counter: 0,
+            counter: Cell::new(0),
             query_entry_queue,
             broker,
-            // generated_query_listener: None,
             query_log_key,
         }
     }
 
-    // pub fn on_generated_query<C: Fn(&QueryRequest) -> () + 'static>(mut self, callback: C) -> Self {
-    //     self.generated_query_listener = Some(Box::new(callback));
-    //     self
-    // }
-
-    fn generate_request(&mut self, time: Duration) -> QueryRequest {
-        let query_id = QueryId(self.query_dist.sample(&mut self.rng));
-        let request_id = self.counter;
-        self.counter += 1;
+    fn generate_request(&self, time: Duration) -> QueryRequest {
+        let query_id = QueryId(self.query_dist.sample(&mut *self.rng.borrow_mut()));
+        let request_id = self.counter.get();
+        self.counter.replace(request_id + 1);
         QueryRequest::new(RequestId(request_id), query_id, time)
     }
 
-    fn next_interval(&mut self) -> u64 {
-        let timeout = self.time_dist.sample(&mut self.rng);
+    fn next_interval(&self) -> u64 {
+        let timeout = self.time_dist.sample(&mut *self.rng.borrow_mut());
         let timeout = match timeout.partial_cmp(&0_f32) {
             None | Some(std::cmp::Ordering::Less) => 0_f32,
             _ => timeout,

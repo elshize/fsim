@@ -7,7 +7,7 @@ use std::collections::{hash_map::Entry, HashMap};
 use std::rc::Rc;
 use std::time::Duration;
 
-use simulation::{Component, ComponentId, Key, QueueId, Scheduler, State};
+use simrs::{Component, ComponentId, Key, QueueId, Scheduler, State};
 
 /// Broker events.
 #[derive(Debug, Copy, Clone)]
@@ -67,7 +67,7 @@ pub struct Broker {
     node_ids: Vec<ComponentId<node::Event>>,
     queries: Rc<Vec<Query>>,
     dispatcher: Box<dyn Dispatch>,
-    responses: HashMap<RequestId, ResponseStatus>,
+    responses: Key<HashMap<RequestId, ResponseStatus>>,
     query_log_id: Key<QueryLog>,
     capacity: usize,
 }
@@ -76,7 +76,7 @@ impl Component for Broker {
     type Event = Event;
 
     fn process_event(
-        &mut self,
+        &self,
         self_id: ComponentId<Self::Event>,
         event: &Self::Event,
         scheduler: &mut Scheduler,
@@ -123,20 +123,21 @@ impl Broker {
         dispatcher: D,
         query_log_id: Key<QueryLog>,
         capacity: usize,
+        responses: Key<HashMap<RequestId, ResponseStatus>>,
     ) -> Self {
         Self {
             queues,
             node_ids,
             queries,
             dispatcher: Box::new(dispatcher),
-            responses: HashMap::new(),
+            responses,
             query_log_id,
             capacity,
         }
     }
 
     fn process_new_request(
-        &mut self,
+        &self,
         self_id: ComponentId<Event>,
         scheduler: &mut Scheduler,
         state: &mut State,
@@ -160,8 +161,30 @@ impl Broker {
         );
     }
 
+    fn modify_responses<T, F: FnOnce(&mut HashMap<RequestId, ResponseStatus>) -> T>(
+        responses_key: Key<HashMap<RequestId, ResponseStatus>>,
+        state: &mut State,
+        modify: F,
+    ) -> T {
+        let responses = state
+            .get_mut(responses_key)
+            .expect("Response hash map not found.");
+        modify(responses)
+    }
+
+    fn insert_response_status(
+        &self,
+        state: &mut State,
+        request_id: RequestId,
+        response_status: ResponseStatus,
+    ) {
+        Self::modify_responses(self.responses, state, |responses| {
+            responses.insert(request_id, response_status);
+        });
+    }
+
     fn process_dispatch(
-        &mut self,
+        &self,
         self_id: ComponentId<Event>,
         scheduler: &mut Scheduler,
         state: &mut State,
@@ -194,12 +217,12 @@ impl Broker {
                 todo!("Check if all dropped")
             }
         }
-        self.responses.insert(request.request_id(), response_status);
+        self.insert_response_status(state, request.request_id(), response_status);
         scheduler.schedule(dispatch_overhead, self_id, Event::Idle);
     }
 
     fn process_response(
-        &mut self,
+        &self,
         self_id: ComponentId<Event>,
         scheduler: &mut Scheduler,
         state: &mut State,
@@ -210,25 +233,31 @@ impl Broker {
             scheduler.time(),
             response.request_id()
         );
-        let mut entry = match self.responses.entry(response.request_id()) {
-            Entry::Vacant(_) => panic!("Cannot find response status"),
-            Entry::Occupied(entry) => entry,
-        };
         let broker_request = response.broker_request();
-        entry.get_mut().received.push(response);
-        if entry.get().is_finished() {
-            log::info!(
-                "[{:?}] Finished processing response: {}",
-                scheduler.time(),
-                broker_request.request_id()
-            );
-            let node_responses = entry.remove();
-            let query_response = QueryResponse::new(
-                broker_request,
-                node_responses.received,
-                node_responses.dropped,
-                scheduler.time(),
-            );
+        let query_response = Self::modify_responses(self.responses, state, |responses| {
+            let mut entry = match responses.entry(response.request_id()) {
+                Entry::Vacant(_) => panic!("Cannot find response status"),
+                Entry::Occupied(entry) => entry,
+            };
+            entry.get_mut().received.push(response);
+            if entry.get().is_finished() {
+                log::info!(
+                    "[{:?}] Finished processing response: {}",
+                    scheduler.time(),
+                    broker_request.request_id()
+                );
+                let node_responses = entry.remove();
+                Some(QueryResponse::new(
+                    broker_request,
+                    node_responses.received,
+                    node_responses.dropped,
+                    scheduler.time(),
+                ))
+            } else {
+                None
+            }
+        });
+        if let Some(query_response) = query_response {
             state
                 .get_mut(self.query_log_id)
                 .expect("Cannot find query log")

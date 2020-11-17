@@ -79,8 +79,22 @@ pub const SHARD_VOLUMES: [f32; 128] = [
 struct Opt {
     #[structopt(long, required_unless = "shard-loads")]
     query_times: Option<PathBuf>,
+
     #[structopt(long, required_unless = "query-times")]
     shard_loads: Option<PathBuf>,
+
+    #[structopt(short, long)]
+    num_machines: usize,
+}
+
+impl Opt {
+    fn shard_loads(&self) -> Result<ShardLoads> {
+        if let Some(query_times_file) = &self.query_times {
+            calc_shard_loads(&query_times_file)
+        } else {
+            read_shard_loads(self.shard_loads.as_ref().unwrap())
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -196,19 +210,16 @@ fn cv(values: &[f32]) -> f32 {
 }
 
 fn assign(opt: &Opt) -> Result<()> {
-    let shard_loads = if let Some(query_times_file) = &opt.query_times {
-        calc_shard_loads(&query_times_file)?
-    } else {
-        read_shard_loads(opt.shard_loads.as_ref().unwrap())?
-    };
+    let shard_loads = opt.shard_loads()?;
+    let num_shards = shard_loads.len();
     let mut builder = AssignmentBuilder::new(Dimension {
-        num_shards: 123,
-        num_machines: 20,
+        num_shards,
+        num_machines: opt.num_machines,
     });
     let progress_bar = ProgressBar::new_spinner();
     builder
         .loads(shard_loads.clone())
-        .replicas(repeat(3).take(123).collect())
+        .replicas(repeat(3).take(num_shards).collect())
         .progress_bar(progress_bar);
     let mut rng = ChaChaRng::from_entropy();
     let (assignment, _) = builder.assign(

@@ -3,7 +3,7 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
 use std::time::Duration;
 
-use simulation::ClockRef;
+use simrs::ClockRef;
 
 use crate::{BrokerRequest, QueryRequest, QueryResponse, RequestId};
 

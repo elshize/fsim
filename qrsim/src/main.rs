@@ -1,3 +1,5 @@
+use std::cell::Cell;
+use std::collections::HashMap;
 use std::fmt;
 use std::fs::File;
 use std::path::PathBuf;
@@ -7,12 +9,12 @@ use std::time::Duration;
 use eyre::WrapErr;
 use itertools::Itertools;
 use serde::Deserialize;
-use simulation::{ComponentId, Key, QueueId};
+use simrs::{ComponentId, Key, QueueId, Simulation};
 
 use qrsim::{
-    Broker, BrokerEvent, BrokerQueues, Dispatch, Node, NodeEvent, NodeId, NodeRequest,
+    run_until, Broker, BrokerEvent, BrokerQueues, Dispatch, Node, NodeEvent, NodeId, NodeRequest,
     NodeResponse, NumCores, Query, QueryGenerator, QueryGeneratorEvent, QueryLog, QueryRequest,
-    QueryRow, ShardId, Simulation,
+    QueryRow, RequestId, ResponseStatus, ShardId,
 };
 
 type QueryGeneratorComponentId = ComponentId<QueryGeneratorEvent>;
@@ -110,16 +112,17 @@ struct SimulationConfig {
 struct RoundRobinDispatcher {
     num_nodes: usize,
     num_shards: usize,
-    next_node: usize,
+    next_node: Cell<usize>,
 }
 
 impl Dispatch for RoundRobinDispatcher {
-    fn dispatch(&mut self, shards: &[ShardId]) -> Vec<(ShardId, qrsim::NodeId)> {
+    fn dispatch(&self, shards: &[ShardId]) -> Vec<(ShardId, qrsim::NodeId)> {
         shards
             .iter()
             .map(|s| {
-                let node = NodeId::from(self.next_node);
-                self.next_node = (self.next_node + 1) % self.num_nodes;
+                let id = self.next_node.get();
+                let node = NodeId::from(id);
+                self.next_node.replace((id + 1) % self.num_nodes);
                 (*s, node)
             })
             .collect()
@@ -134,7 +137,7 @@ impl Dispatch for RoundRobinDispatcher {
 
 struct DummyDispatcher;
 impl Dispatch for DummyDispatcher {
-    fn dispatch(&mut self, _shards: &[ShardId]) -> Vec<(ShardId, qrsim::NodeId)> {
+    fn dispatch(&self, _shards: &[ShardId]) -> Vec<(ShardId, qrsim::NodeId)> {
         vec![]
     }
     fn num_nodes(&self) -> usize {
@@ -244,6 +247,9 @@ impl SimulationConfig {
             broker_response_queue,
             Rc::clone(&queries),
         );
+        let response_map = sim
+            .state
+            .insert(HashMap::<RequestId, ResponseStatus>::new());
         let broker = sim.add_component(Broker::new(
             BrokerQueues {
                 entry: entry_queue,
@@ -253,12 +259,13 @@ impl SimulationConfig {
             nodes,
             Rc::clone(&queries),
             RoundRobinDispatcher {
-                next_node: 0,
+                next_node: Cell::new(0),
                 num_nodes: self.num_nodes,
                 num_shards: self.num_shards,
             },
             query_log_id,
             self.num_nodes * 10,
+            response_map,
         ));
         let query_generator =
             self.query_generator(&mut sim, broker, entry_queue, queries.len(), query_log_id);
@@ -269,13 +276,13 @@ impl SimulationConfig {
             QueryGeneratorEvent::GenerateQuery,
         );
 
-        sim.run_until(Duration::from_secs(120), query_log_id);
+        run_until(&mut sim, Duration::from_secs(120), query_log_id);
         Ok(())
     }
 }
 
 fn setup_logger() -> Result<(), fern::InitError> {
-    std::fs::remove_file("/tmp/output.log").expect("Couldn't remove log file.");
+    let _ = std::fs::remove_file("/tmp/output.log");
     fern::Dispatch::new()
         .format(|out, message, record| out.finish(format_args!("[{}] {}", record.level(), message)))
         .level(log::LevelFilter::Off)
