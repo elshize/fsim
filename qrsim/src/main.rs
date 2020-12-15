@@ -2,6 +2,7 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::File;
+use std::io;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
@@ -12,9 +13,9 @@ use serde::Deserialize;
 use simrs::{ComponentId, Key, QueueId, Simulation};
 
 use qrsim::{
-    run_until, Broker, BrokerEvent, BrokerQueues, Dispatch, Node, NodeEvent, NodeId, NodeRequest,
-    NodeResponse, NumCores, Query, QueryGenerator, QueryGeneratorEvent, QueryLog, QueryRequest,
-    QueryRow, RequestId, ResponseStatus, ShardId,
+    run_until, write_from_channel, Broker, BrokerEvent, BrokerQueues, Dispatch, Node, NodeEvent,
+    NodeId, NodeRequest, NodeResponse, NumCores, Query, QueryGenerator, QueryGeneratorEvent,
+    QueryLog, QueryRequest, QueryRow, RequestId, ResponseStatus, ShardId,
 };
 
 type QueryGeneratorComponentId = ComponentId<QueryGeneratorEvent>;
@@ -231,10 +232,16 @@ impl SimulationConfig {
     fn run(&self) -> eyre::Result<()> {
         let mut sim = Simulation::default();
 
-        let query_log_id = sim.state.insert(QueryLog::new(
-            sim.scheduler.clock(),
-            Duration::from_secs(10),
-        ));
+        let (query_sender, receiver) = std::sync::mpsc::channel();
+        write_from_channel(io::BufWriter::new(File::create("queries.csv")?), receiver);
+        let (node_sender, receiver) = std::sync::mpsc::channel();
+        write_from_channel(io::BufWriter::new(File::create("nodes.csv")?), receiver);
+
+        let query_log_id = sim.state.insert(
+            QueryLog::new(sim.scheduler.clock(), Duration::from_secs(10))
+                .query_sender(query_sender)
+                .node_sender(node_sender),
+        );
         let queries = Rc::new(self.queries()?);
 
         let entry_queue = sim.add_bounded_queue::<QueryRequest>(self.broker.incoming_queue_size);
@@ -276,7 +283,12 @@ impl SimulationConfig {
             QueryGeneratorEvent::GenerateQuery,
         );
 
-        run_until(&mut sim, Duration::from_secs(120), query_log_id);
+        run_until(&mut sim, Duration::from_secs(60), query_log_id);
+        // let query_log = sim
+        //     .state
+        //     .remove(query_log_id)
+        //     .expect("query log must be there");
+        //serde_json::to_writer(File::create("query.log")?, &query_log)?;
         Ok(())
     }
 }
@@ -306,7 +318,7 @@ fn main() -> eyre::Result<()> {
             average_interval: Duration::from_micros(1500),
         },
         broker: BrokerConfig::default(),
-        num_cores: NumCores::from(8),
+        num_cores: NumCores::from(16),
         node_queue_size: default_node_queue_size(),
         num_nodes: 20,
         num_shards: 123,

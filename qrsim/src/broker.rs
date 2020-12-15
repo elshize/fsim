@@ -90,12 +90,12 @@ impl Component for Broker {
             Event::NewRequest => {
                 // let waiting_requests: usize =
                 //     self.node_queues.iter().map(|&qid| state.len(qid)).sum();
-                let waiting_requests = state.get(self.query_log_id).unwrap().active_requests();
-                if waiting_requests < self.capacity {
-                    if let Some(request) = state.recv(self.queues.entry) {
-                        self.process_new_request(self_id, scheduler, state, request);
-                    }
+                // let active_requests = state.get(self.query_log_id).unwrap().active_requests();
+                // if active_requests < self.capacity {
+                if let Some(request) = state.recv(self.queues.entry) {
+                    self.process_new_request(self_id, scheduler, state, request);
                 }
+                // }
             }
             Event::Dispatch { request, shards } => {
                 self.process_dispatch(self_id, scheduler, state, *request, *shards)
