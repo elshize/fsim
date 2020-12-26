@@ -62,7 +62,7 @@ fn count_lines(path: &Path) -> anyhow::Result<usize> {
 /// returns an iterator of shard assignments for consecutive documents, i.e.,
 /// the first element is the shard ID of document at index 0, the second is the shard
 /// of document 1, and so on.
-fn assignment<'a>(ids: &'a [usize], num_shards: usize) -> impl Iterator<Item = usize> + 'a {
+fn assignment(ids: &[usize], num_shards: usize) -> impl Iterator<Item = usize> + '_ {
     let shard_size = (ids.len() + num_shards - 1) / num_shards;
     ids.chunks(shard_size)
         .enumerate()

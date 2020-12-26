@@ -18,11 +18,12 @@
 
 mod array;
 mod replica;
+mod routing;
 pub mod solver;
-//mod routing;
 
 //pub use distribution::AssignmentDistribution;
 pub use replica::{AssignmentBuilder, AssignmentMethod, Dimension, ReplicaAssignment};
+pub use routing::{LpOptimizer, Optimizer};
 
 /// Error type encompassing all optimization errors.
 #[derive(Debug, thiserror::Error)]
@@ -75,4 +76,27 @@ pub struct MachineParams {
     pub capacities: MachineCapacities,
     /// Slowdown factor, relative to other shards. All equal 1 if machines considered identical.
     pub inhibitions: MachineInhibitions,
+}
+
+/// Result of assigning replicas to nodes.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct AssignmentResult {
+    /// Maximum machine load.
+    pub max_load: f32,
+    /// Minimum machine load.
+    pub min_load: f32,
+    /// Average machine load.
+    pub avg_load: f32,
+    /// Median machine load.
+    pub med_load: f32,
+    /// Coefficient of variance of machine loads.
+    pub cv: f32,
+    /// Machine loads.
+    pub loads: Vec<f32>,
+    /// Counts of shards in each machine.
+    pub counts: Vec<usize>,
+    /// Assignment of replicas to nodes.
+    pub nodes: Vec<Vec<usize>>,
+    /// Assignment weight matrix describing loads for each replica.
+    pub weights: Vec<Vec<f32>>,
 }

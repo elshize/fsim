@@ -437,7 +437,7 @@ mod test {
             &serde_json::to_string(&query_response).unwrap(),
             r#"{"request_id":0,"query_id":0,"entry_time":0,"broker_time":1,"dispatch_time":2,"response_time":5}"#
         );
-        assert_eq!(&query_response.to_csv_record(), "0,0,0,1,2,5");
+        assert_eq!(&query_response.to_csv_record(), "0,0,0,1,2,5\n");
     }
 
     // #[rstest]

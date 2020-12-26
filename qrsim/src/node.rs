@@ -4,16 +4,18 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use simrs::{Component, ComponentId, Key, QueueId, Scheduler, State};
 
 /// Node events.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Event {
     /// Node has finished doing work and is ready to pick up the next request.
     Idle,
     /// New request has just arrived at the node's queue.
     NewRequest,
     /// Processing of the request passed in the event has finished.
+    #[serde(skip)]
     ProcessingFinished {
         /// When the processing started, i.e., request was picked up from the queue.
         start: Duration,

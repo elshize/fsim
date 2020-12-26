@@ -7,16 +7,20 @@ use std::collections::{hash_map::Entry, HashMap};
 use std::rc::Rc;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use simrs::{Component, ComponentId, Key, QueueId, Scheduler, State};
 
 /// Broker events.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[serde(tag = "type")]
 pub enum Event {
     /// Broker has become idle after finishing a task.
     Idle,
     /// A new query request has reached the incoming queue.
-    NewRequest,
+    NewRequest(QueryRequest),
     /// Broker is ready to dispatch node requests.
+    #[serde(skip)]
     Dispatch {
         /// Request to issue.
         request: BrokerRequest,
@@ -51,8 +55,8 @@ impl ResponseStatus {
 
 /// Container for queues coming in to and out of the broker.
 pub struct BrokerQueues {
-    /// The main entry queue where the queries originate.
-    pub entry: QueueId<QueryRequest>,
+    // /// The main entry queue where the queries originate.
+    // pub entry: QueueId<QueryRequest>,
     /// Outgoing queues to shard nodes.
     pub node: Vec<QueueId<(NodeRequest, ComponentId<Event>)>>,
     /// Incoming queues from shard nodes.
@@ -63,13 +67,18 @@ pub struct BrokerQueues {
 /// - picks up new incoming queries and dispatches them to nodes,
 /// - aggregates responses from nodes.
 pub struct Broker {
-    queues: BrokerQueues,
-    node_ids: Vec<ComponentId<node::Event>>,
-    queries: Rc<Vec<Query>>,
-    dispatcher: Box<dyn Dispatch>,
-    responses: Key<HashMap<RequestId, ResponseStatus>>,
-    query_log_id: Key<QueryLog>,
-    capacity: usize,
+    /// Incoming/outgoing queues.
+    pub queues: BrokerQueues,
+    /// List of all component IDs for the nodes in the system.
+    pub node_ids: Vec<ComponentId<node::Event>>,
+    /// A reference to the list of all available queries, used to access times.
+    pub queries: Rc<Vec<Query>>,
+    /// The routing policy.
+    pub dispatcher: Box<dyn Dispatch>,
+    /// The key to the map of all responses, used to track when each query is fully processed.
+    pub responses: Key<HashMap<RequestId, ResponseStatus>>,
+    /// The key of the query log for status updates.
+    pub query_log_id: Key<QueryLog>,
 }
 
 impl Component for Broker {
@@ -87,14 +96,14 @@ impl Component for Broker {
                 // For unlimited throughput, as it is now, this doesn't matter.
                 // Should be handled, though, if limited resources are implemented.
             }
-            Event::NewRequest => {
+            Event::NewRequest(request) => {
                 // let waiting_requests: usize =
                 //     self.node_queues.iter().map(|&qid| state.len(qid)).sum();
                 // let active_requests = state.get(self.query_log_id).unwrap().active_requests();
                 // if active_requests < self.capacity {
-                if let Some(request) = state.recv(self.queues.entry) {
-                    self.process_new_request(self_id, scheduler, state, request);
-                }
+                // if let Some(request) = state.recv(self.queues.entry) {
+                self.process_new_request(self_id, scheduler, state, *request);
+                // }
                 // }
             }
             Event::Dispatch { request, shards } => {
@@ -110,31 +119,29 @@ impl Component for Broker {
 }
 
 impl Broker {
-    /// Constructs a new broker. It takes 3 types of queues: incoming query queue, outgoing node
-    /// request queues, and node response queue.
-    /// It also takes the component IDs of the nodes to schedule their events.
-    /// Furthermore, queries are passed for access to selection times.
-    /// Finally, a dispatcher is given for query routing, and an ID to access the state's query log
-    /// to log finished queries.
-    pub fn new<D: Dispatch + 'static>(
-        queues: BrokerQueues,
-        node_ids: Vec<ComponentId<node::Event>>,
-        queries: Rc<Vec<Query>>,
-        dispatcher: D,
-        query_log_id: Key<QueryLog>,
-        capacity: usize,
-        responses: Key<HashMap<RequestId, ResponseStatus>>,
-    ) -> Self {
-        Self {
-            queues,
-            node_ids,
-            queries,
-            dispatcher: Box::new(dispatcher),
-            responses,
-            query_log_id,
-            capacity,
-        }
-    }
+    // /// Constructs a new broker. It takes 3 types of queues: incoming query queue, outgoing node
+    // /// request queues, and node response queue.
+    // /// It also takes the component IDs of the nodes to schedule their events.
+    // /// Furthermore, queries are passed for access to selection times.
+    // /// Finally, a dispatcher is given for query routing, and an ID to access the state's query log
+    // /// to log finished queries.
+    // pub fn new<D: Dispatch + 'static>(
+    //     queues: BrokerQueues,
+    //     node_ids: Vec<ComponentId<node::Event>>,
+    //     queries: Rc<Vec<Query>>,
+    //     dispatcher: D,
+    //     query_log_id: Key<QueryLog>,
+    //     responses: Key<HashMap<RequestId, ResponseStatus>>,
+    // ) -> Self {
+    //     Self {
+    //         queues,
+    //         node_ids,
+    //         queries,
+    //         dispatcher: Box::new(dispatcher),
+    //         responses,
+    //         query_log_id,
+    //     }
+    // }
 
     fn process_new_request(
         &self,
@@ -143,7 +150,7 @@ impl Broker {
         state: &mut State,
         request: QueryRequest,
     ) {
-        log::info!("Broker picked up request: {:?}", request);
+        log::debug!("Broker picked up request: {:?}", request);
         let query = &self.queries[usize::from(request.query_id)];
         let selection_time = Duration::from_micros(query.selection_time);
         let shards: Vec<ShardId> = query.selected_shards.clone().unwrap_or_else(|| {
@@ -151,6 +158,10 @@ impl Broker {
                 .map(ShardId::from)
                 .collect()
         });
+        state
+            .get_mut(self.query_log_id)
+            .unwrap()
+            .new_request(request);
         scheduler.schedule(
             selection_time,
             self_id,
@@ -191,7 +202,7 @@ impl Broker {
         request: BrokerRequest,
         shards: Key<Vec<ShardId>>,
     ) {
-        log::info!("Dispatching request {}", request.request_id());
+        log::debug!("Dispatching request {}", request.request_id());
         state
             .get_mut(self.query_log_id)
             .unwrap()
@@ -228,7 +239,7 @@ impl Broker {
         state: &mut State,
         response: NodeResponse,
     ) {
-        log::info!(
+        log::debug!(
             "[{:?}] Processing response: {}",
             scheduler.time(),
             response.request_id()
@@ -241,7 +252,7 @@ impl Broker {
             };
             entry.get_mut().received.push(response);
             if entry.get().is_finished() {
-                log::info!(
+                log::debug!(
                     "[{:?}] Finished processing response: {}",
                     scheduler.time(),
                     broker_request.request_id()

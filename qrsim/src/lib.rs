@@ -27,14 +27,43 @@ use strum::IntoEnumIterator;
 mod broker;
 pub use broker::{Broker, BrokerQueues, Event as BrokerEvent, ResponseStatus};
 
-mod query_generator;
-pub use query_generator::{Event as QueryGeneratorEvent, QueryGenerator};
-
 mod node;
 pub use node::{Event as NodeEvent, Node};
 
 mod query_log;
 pub use query_log::{write_from_channel, QueryLog};
+
+mod dispatch;
+pub use dispatch::dummy::DummyDispatcher;
+pub use dispatch::probability::ProbabilisticDispatcher;
+pub use dispatch::round_robin::RoundRobinDispatcher;
+pub use dispatch::Dispatch;
+
+/// See [`TimedEvent`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "component")]
+#[serde(rename_all = "snake_case")]
+pub enum Event {
+    /// Broker-level event.
+    Broker(BrokerEvent),
+    /// Node-level event.
+    Node {
+        /// Node ID on which to execute the event.
+        node_id: NodeId,
+        /// Type of event.
+        event: NodeEvent,
+    },
+}
+
+/// Event that can be provided at the input of the simulation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimedEvent {
+    /// Event occurring at `time`.
+    pub event: Event,
+    /// The moment from the start of the simulation when the event occurs.
+    #[serde(with = "micro")]
+    pub time: Duration,
+}
 
 use label::Label;
 mod label {
@@ -149,9 +178,17 @@ pub struct RequestId(usize);
     From, Into, Debug, PartialEq, PartialOrd, Eq, Ord, Serialize, Deserialize, Copy, Clone, Hash,
 )]
 pub struct NumCores(usize);
+
 impl Default for NumCores {
     fn default() -> Self {
         NumCores(1)
+    }
+}
+
+impl std::str::FromStr for NumCores {
+    type Err = std::num::ParseIntError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        s.parse::<usize>().map(Self)
     }
 }
 
@@ -170,7 +207,7 @@ pub struct QueryRow {
 }
 
 /// Query data.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Query {
     /// Shards that will be selected for this query. If `None`, then all shards selected.
     pub selected_shards: Option<Vec<ShardId>>,
@@ -184,24 +221,82 @@ pub struct Query {
 }
 
 /// A query request sent to the broker by the query generator.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueryRequest {
     #[serde(rename = "request_id")]
     id: RequestId,
     query_id: QueryId,
-    #[serde(serialize_with = "serialize_micro", rename = "entry_time")]
+    #[serde(with = "micro", rename = "entry_time")]
     time: Duration,
 }
 
-fn serialize_micro<S>(time: &Duration, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::ser::Serializer,
-{
-    serializer.serialize_u128(time.as_micros())
+mod micro {
+    use std::time::Duration;
+
+    pub fn serialize<S>(time: &Duration, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::ser::Serializer,
+    {
+        use std::convert::TryFrom;
+        serializer.serialize_u64(u64::try_from(time.as_micros()).expect("int out of bounds"))
+    }
+
+    use std::fmt;
+
+    use serde::de::{self, Visitor};
+
+    struct I64Visitor;
+
+    impl<'de> Visitor<'de> for I64Visitor {
+        type Value = u64;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("an integer between 0 and 2^64")
+        }
+
+        fn visit_u8<E>(self, value: u8) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(u64::from(value))
+        }
+
+        fn visit_u16<E>(self, value: u16) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(u64::from(value))
+        }
+
+        fn visit_u32<E>(self, value: u32) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(u64::from(value))
+        }
+
+        fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(value)
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Duration, D::Error>
+    where
+        D: serde::de::Deserializer<'de>,
+    {
+        deserializer
+            .deserialize_u64(I64Visitor)
+            .map(Duration::from_micros)
+    }
 }
 
 impl QueryRequest {
-    fn new(request_id: RequestId, query_id: QueryId, time: Duration) -> Self {
+    /// Constructs a new query request at `time`.
+    #[must_use]
+    pub fn new(request_id: RequestId, query_id: QueryId, time: Duration) -> Self {
         Self {
             id: request_id,
             query_id,
@@ -233,7 +328,7 @@ impl QueryRequest {
 pub struct BrokerRequest {
     #[serde(flatten)]
     query_request: QueryRequest,
-    #[serde(serialize_with = "serialize_micro", rename = "broker_time")]
+    #[serde(with = "micro", rename = "broker_time")]
     time: Duration,
 }
 
@@ -272,7 +367,7 @@ pub struct NodeRequest {
     shard_id: ShardId,
     #[serde(flatten)]
     broker_request: Rc<BrokerRequest>, // stored in an Rc to ensure they don't diverge later on
-    #[serde(serialize_with = "serialize_micro", rename = "dispatch_time")]
+    #[serde(with = "micro", rename = "dispatch_time")]
     time: Duration,
 }
 
@@ -327,9 +422,9 @@ pub struct NodeResponse {
     #[serde(flatten)]
     request: NodeRequest,
     node_id: NodeId,
-    #[serde(serialize_with = "serialize_micro", rename = "node_start_time")]
+    #[serde(with = "micro", rename = "node_start_time")]
     start: Duration,
-    #[serde(serialize_with = "serialize_micro", rename = "node_end_time")]
+    #[serde(with = "micro", rename = "node_end_time")]
     end: Duration,
 }
 
@@ -407,9 +502,9 @@ pub struct QueryResponse {
     received_responses: Vec<NodeResponse>,
     #[serde(skip_serializing)]
     dropped_requests: Vec<NodeRequest>,
-    #[serde(serialize_with = "serialize_micro")]
+    #[serde(with = "micro")]
     dispatch_time: Duration,
-    #[serde(serialize_with = "serialize_micro")]
+    #[serde(with = "micro")]
     response_time: Duration,
 }
 
@@ -497,20 +592,10 @@ impl QueryResponse {
     }
 }
 
-/// Implementors are dispatch policies that select nodes for requested shards.
-pub trait Dispatch {
-    /// Selects a node for each requested shard.
-    fn dispatch(&self, shards: &[ShardId]) -> Vec<(ShardId, NodeId)>;
-    /// Total number of existing shards.
-    fn num_shards(&self) -> usize;
-    /// Total number of existing nodes.
-    fn num_nodes(&self) -> usize;
-}
-
 fn print_legend() {
     println!("Legend:");
     for label in Label::iter() {
-        println!("{}\t{}", label.short(), label.long());
+        println!("\t{}\t{}", label.short(), label.long());
     }
 }
 
@@ -559,4 +644,41 @@ pub fn run_until(simulation: &mut Simulation, time: Duration, key: Key<QueryLog>
     }
     pb.finish();
     time
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_deserialize_event() {
+        let event = TimedEvent {
+            event: Event::Broker(BrokerEvent::NewRequest(QueryRequest::new(
+                RequestId::from(0),
+                QueryId::from(2),
+                Duration::from_micros(1),
+            ))),
+            time: Duration::from_micros(1),
+        };
+        assert_eq!(
+            serde_json::to_string(&event).unwrap(),
+            r#"{
+    "event": {
+        "component":"broker",
+        "type":"new_request",
+        "request_id":0,
+        "query_id":2,
+        "entry_time":1
+    },
+    "time":1
+}"#
+            .chars()
+            .filter(|c| !c.is_ascii_whitespace())
+            .collect::<String>()
+        );
+        assert_eq!(
+            rmp_serde::from_read_ref::<_, TimedEvent>(&rmp_serde::to_vec(&event).unwrap()).unwrap(),
+            event
+        );
+    }
 }

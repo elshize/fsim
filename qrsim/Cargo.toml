@@ -1,13 +1,21 @@
 [package]
 name = "qrsim"
 version = "0.1.0"
-authors = ["Michal Siedlaczek <michal.siedlaczek@gmail.com>"]
+authors = ["Michal Siedlaczek <michal.siedlaczek@pm.me>"]
 edition = "2018"
+
+[[bin]]
+name = "sim"
+path = "src/main.rs"
+
+[[bin]]
+name = "geninput"
+path = "src/geninput.rs"
 
 [dependencies]
 rand = "0.7"
-rand_chacha = "0.2"
-rand_distr = "0.2"
+rand_chacha = "0.3"
+rand_distr = { version = "0.4", features = ["alloc"] }
 simrs = "0.1"
 log = "0.4"
 fern = "0.5"
@@ -23,6 +31,11 @@ delegate = "0.4"
 indicatif = "0.15"
 strum = { version = "0.20", features = ["derive"] }
 csv = "1.1"
+clap = "3.0.0-beta.2"
+bincode = "1"
+rmp-serde = "0.15"
+ndarray = "0.14"
+optimization = { path = "../optimization" }
 
 [dev-dependencies]
 float-cmp = "0.8"

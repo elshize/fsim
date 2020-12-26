@@ -1,50 +1,81 @@
 //! Optimize query routing.
 
-use crate::{Error, Result};
-use lp_modeler::dsl::{
-    lp_sum,
-    BoundableLp,
-    LpContinuous,
-    LpObjective,
-    LpOperations,
-    LpProblem, //Problem,
-};
+use std::collections::HashMap;
+
+// use crate::{Error, Result};
+use lp_modeler::dsl::{lp_sum, BoundableLp, LpContinuous, LpObjective, LpOperations, LpProblem};
 use lp_modeler::solvers::{CbcSolver, SolverTrait};
-use nalgebra::{DMatrix, DVector};
+use ndarray::{Array2, ArrayView2};
 
 /// Represents techniques optimizing routing probabilities.
 pub trait Optimizer {
     /// Optimize routing policy.
-    fn optimize(&self, routing: ProbabilityRouting) -> DMatrix<f32>;
+    fn optimize(&self, weights: ArrayView2<'_, f32>) -> Array2<f32>;
 }
 
 /// No optimization: returns the same weights as given on input.
 pub struct IdentityOptimizer {}
 
 impl Optimizer for IdentityOptimizer {
-    fn optimize(&self, routing: ProbabilityRouting) -> DMatrix<f32> {
-        routing.nodes
+    fn optimize(&self, weights: ArrayView2<'_, f32>) -> Array2<f32> {
+        weights.to_owned()
     }
 }
 
 /// Balances load with an LP program.
-pub struct LpOptimizer {}
+pub struct LpOptimizer;
+
+fn format_dispatch_variable(shard: usize, node: usize) -> String {
+    format!("d({},{})", shard, node)
+}
+
+fn parse_dispatch_variable(name: &str) -> Option<(usize, usize)> {
+    match (name.find('('), name.find(','), name.find(')')) {
+        (Some(open_bracket), Some(comma), Some(close_bracket)) => {
+            if name.get(..open_bracket).unwrap() == "d" && name.get(close_bracket..).unwrap() == ")"
+            {
+                let shard = name
+                    .get(open_bracket + 1..comma)
+                    .and_then(|n| n.parse::<usize>().ok())?;
+                let node = name
+                    .get(comma + 1..close_bracket)
+                    .and_then(|n| n.parse::<usize>().ok())?;
+                Some((shard, node))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn result_to_array(dim: (usize, usize), result: &HashMap<String, f32>) -> Array2<f32> {
+    let mut array = Array2::<f32>::from_elem(dim, 0.0);
+    for (variable, value) in result {
+        if let Some((shard, node)) = parse_dispatch_variable(variable) {
+            *array
+                .get_mut((node, shard))
+                .expect("variable points out of bounds") = *value;
+        }
+    }
+    array
+}
 
 impl Optimizer for LpOptimizer {
-    fn optimize(&self, routing: ProbabilityRouting) -> DMatrix<f32> {
+    fn optimize(&self, weights: ArrayView2<'_, f32>) -> Array2<f32> {
         let mut problem = LpProblem::new("Balance routing", LpObjective::Minimize);
         let z = LpContinuous::new("Z");
         problem += &z;
-        let dispatch_variables: Vec<Vec<_>> = routing
-            .nodes
-            .row_iter()
+        let dispatch_variables: Vec<Vec<_>> = weights
+            .gencolumns()
+            .into_iter()
             .enumerate()
             .map(|(shard, weights)| {
                 let shard_vars: Vec<_> = weights
                     .iter()
                     .enumerate()
                     .map(|(node, _)| {
-                        LpContinuous::new(&format!("d({}, {})", shard, node))
+                        LpContinuous::new(&format_dispatch_variable(shard, node))
                             .lower_bound(0.0)
                             .upper_bound(1.0)
                     })
@@ -53,7 +84,7 @@ impl Optimizer for LpOptimizer {
                 shard_vars
             })
             .collect();
-        for node in 0..routing.num_nodes() {
+        for node in 0..weights.nrows() {
             let node_vars: Vec<_> = dispatch_variables
                 .iter()
                 .map(|shard_vars| &shard_vars[node])
@@ -61,178 +92,82 @@ impl Optimizer for LpOptimizer {
             problem += lp_sum(&node_vars).le(&z);
         }
         let solver = CbcSolver::new();
-        let (_, _result) = solver.run(&problem).unwrap();
-        todo!()
-    }
-}
-
-/// Sets up routing system for optimization.
-pub struct ProbabilityRouting {
-    nodes: DMatrix<f32>,
-}
-
-impl ProbabilityRouting {
-    /// Constructs a routing instance with requested numbers of nodes and shards.
-    #[must_use]
-    pub fn new(nodes: usize, shards: usize) -> Self {
-        Self {
-            nodes: DMatrix::from_element(nodes, shards, 0.0),
-        }
-    }
-
-    /// Constructs a routing instance from an assignment matrix.
-    pub fn from_nodes<N, S, F>(nodes: N) -> Self
-    where
-        N: IntoIterator<Item = S>,
-        S: IntoIterator<Item = F>,
-        F: Into<f32>,
-    {
-        Self {
-            nodes: DMatrix::from_columns(
-                &nodes
-                    .into_iter()
-                    .map(|node| {
-                        DVector::from_column_slice(
-                            &node.into_iter().map(F::into).collect::<Vec<_>>()[..],
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-            ),
-        }
-    }
-
-    /// Scale node weights. The larger the value, the slower the machine.
-    ///
-    /// # Errors
-    ///
-    /// An error will be returned if the number of factors passed to the functions does not match
-    /// the number of nodes.
-    pub fn scale_nodes(&mut self, factors: &[f32]) -> Result<&mut Self> {
-        if factors.len() == self.num_nodes() {
-            let vec = DVector::from_column_slice(factors);
-            for (mut column, m) in self.nodes.column_iter_mut().zip(vec.iter()) {
-                for elem in column.iter_mut() {
-                    *elem *= m;
-                }
+        let solution = solver.run(&problem).expect("failed to run the CBC solver");
+        match solution.status {
+            lp_modeler::solvers::Status::Optimal => {
+                result_to_array(weights.dim(), &solution.results)
             }
-            Ok(self)
-        } else {
-            Err(Error::InconsistentMachineCount)
+            status => panic!("CBC solver failed: {:?}", status),
         }
-    }
-
-    /// Scale shard weights. The larger the value, the slower retrieval.
-    ///
-    /// # Errors
-    ///
-    /// An error will be returned if the number of factors passed to the functions does not match
-    /// the number of shards.
-    pub fn scale_shards(&mut self, factors: &[f32]) -> Result<&mut Self> {
-        if factors.len() == self.num_shards() {
-            let vec = DVector::from_row_slice(factors);
-            for mut column in self.nodes.column_iter_mut() {
-                for (a, b) in column.iter_mut().zip(vec.iter()) {
-                    *a *= b;
-                }
-            }
-            Ok(self)
-        } else {
-            Err(Error::InconsistentShardCount)
-        }
-    }
-
-    /// Optimizes routing.
-    pub fn optimize<O: Optimizer>(self, optimizer: &O) -> DMatrix<f32> {
-        optimizer.optimize(self)
-    }
-
-    /// Number of shards.
-    #[must_use]
-    pub fn num_shards(&self) -> usize {
-        self.nodes.nrows()
-    }
-
-    /// Number of nodes.
-    #[must_use]
-    pub fn num_nodes(&self) -> usize {
-        self.nodes.ncols()
     }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
+    use proptest::prelude::*;
 
-    #[test]
-    fn test_construct_from_nodes() {
-        let r = ProbabilityRouting::from_nodes(vec![vec![0.0]]);
-        assert_eq!(r.num_shards(), 1);
-        assert_eq!(r.num_nodes(), 1);
-
-        let r = ProbabilityRouting::from_nodes(vec![vec![0.0, 0.0]]);
-        assert_eq!(r.num_shards(), 2);
-        assert_eq!(r.num_nodes(), 1);
-
-        let r = ProbabilityRouting::from_nodes(vec![
-            vec![0.0, 0.0],
-            vec![0.0, 0.0],
-            vec![0.0, 0.0],
-            vec![0.0, 0.0],
-        ]);
-        assert_eq!(r.num_shards(), 2);
-        assert_eq!(r.num_nodes(), 4);
+    fn test_dispatch(weights: ArrayView2<'_, f32>) {
+        let optimizer = LpOptimizer;
+        let dispatch = optimizer.optimize(weights);
+        assert!(dispatch.iter().all(|&v| v >= 0.0 && v <= 1.0));
+        dispatch
+            .genrows()
+            .into_iter()
+            .map(|row| row.iter().sum::<f32>())
+            .all(|s| approx::ulps_eq!(s, 1.0, max_ulps = 4, epsilon = f32::EPSILON));
     }
 
-    #[test]
-    #[should_panic]
-    fn test_construct_from_invalid_nodes() {
-        ProbabilityRouting::from_nodes(vec![
-            vec![0.0, 0.0],
-            vec![0.0, 0.0],
-            vec![0.0],
-            vec![0.0, 0.0],
-        ]);
+    fn assignment(length: usize, replicas: usize) -> impl Strategy<Value = Vec<bool>> {
+        let v = std::iter::repeat(true)
+            .take(replicas)
+            .chain(std::iter::repeat(false))
+            .take(length)
+            .collect::<Vec<_>>();
+        Just(v).prop_shuffle()
     }
 
-    #[test]
-    fn test_scale_nodes() {
-        let mut r = ProbabilityRouting::from_nodes(vec![
-            vec![1.0, 1.0, 0.0],
-            vec![0.0, 1.0, 1.0],
-            vec![1.0, 1.0, 0.0],
-            vec![1.0, 0.0, 1.0],
-        ]);
-        assert!(r.scale_nodes(&[0.0]).is_err());
-        r.scale_nodes(&[1.0, 2.0, 3.0, 4.0]).unwrap();
-        assert_eq!(
-            r.nodes,
-            DMatrix::from_columns(&[
-                DVector::from_column_slice(&[1.0, 1.0, 0.0]),
-                DVector::from_column_slice(&[0.0, 2.0, 2.0]),
-                DVector::from_column_slice(&[3.0, 3.0, 0.0]),
-                DVector::from_column_slice(&[4.0, 0.0, 4.0]),
-            ])
-        );
+    fn distr(length: usize, replicas: usize) -> impl Strategy<Value = Vec<f32>> {
+        (
+            assignment(length, replicas),
+            prop::collection::vec(0.1_f32..1.0, replicas..=replicas),
+        )
+            .prop_map(|(assignment, mut probs)| {
+                let norm: f32 = probs.iter().sum();
+                for prob in probs.iter_mut() {
+                    *prob /= norm;
+                }
+                let mut v = assignment
+                    .into_iter()
+                    .map(|a| if a { 1.0 } else { 0.0 })
+                    .collect::<Vec<_>>();
+                for (r, prob) in v.iter_mut().filter(|x| **x > 0.0).zip(probs) {
+                    *r = prob;
+                }
+                v
+            })
     }
 
-    #[test]
-    fn test_scale_shards() {
-        let mut r = ProbabilityRouting::from_nodes(vec![
-            vec![1.0, 1.0, 0.0],
-            vec![0.0, 1.0, 1.0],
-            vec![1.0, 1.0, 0.0],
-            vec![1.0, 0.0, 1.0],
-        ]);
-        assert!(r.scale_shards(&[0.0]).is_err());
-        r.scale_shards(&[1.0, 2.0, 3.0]).unwrap();
-        assert_eq!(
-            r.nodes,
-            DMatrix::from_columns(&[
-                DVector::from_column_slice(&[1.0, 2.0, 0.0]),
-                DVector::from_column_slice(&[0.0, 2.0, 3.0]),
-                DVector::from_column_slice(&[1.0, 2.0, 0.0]),
-                DVector::from_column_slice(&[1.0, 0.0, 3.0]),
-            ])
-        );
+    fn weights() -> impl Strategy<Value = Array2<f32>> {
+        (2..10_usize, 2..10_usize, 2..=3_usize)
+            .prop_flat_map(|(nodes, shards, replicas)| {
+                (
+                    Just(nodes),
+                    Just(shards),
+                    prop::collection::vec(distr(nodes, replicas), shards..=shards),
+                )
+            })
+            .prop_map(|(nodes, shards, vecs)| {
+                Array2::from_shape_vec((shards, nodes), vecs.into_iter().flatten().collect())
+                    .expect("unable to create array")
+                    .reversed_axes()
+            })
+    }
+
+    proptest! {
+        #[test]
+        fn test_probabilistic_dispatch(weights in weights()) {
+            test_dispatch(weights.view());
+        }
     }
 }

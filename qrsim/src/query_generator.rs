@@ -28,7 +28,6 @@ where
     counter: Cell<usize>,
     query_entry_queue: QueueId<QueryRequest>,
     broker: ComponentId<BrokerEvent>,
-    // generated_query_listener: Option<Box<dyn Fn(&QueryRequest) -> ()>>,
     query_log_key: Key<QueryLog>,
 }
 
@@ -55,23 +54,24 @@ where
                     .get_mut(self.query_log_key)
                     .expect("Query log not found in state")
                     .new_request(request);
-                if state.send(self.query_entry_queue, request).is_err() {
-                    log::warn!(
-                        "[{:?}] Request {} was dropped",
-                        scheduler.time(),
-                        request.request_id()
-                    );
-                    state
-                        .get_mut(self.query_log_key)
-                        .expect("Query log not found in state")
-                        .drop_request(request);
-                }
+                // if state.send(self.query_entry_queue, request).is_err() {
+                //     log::warn!(
+                //         "[{:?}] Request {} was dropped",
+                //         scheduler.time(),
+                //         request.request_id()
+                //     );
+                //     state
+                //         .get_mut(self.query_log_key)
+                //         .expect("Query log not found in state")
+                //         .drop_request(request);
+                // }
                 scheduler.schedule(
                     Duration::from_micros(self.next_interval()),
                     self_id,
                     Event::GenerateQuery,
                 );
-                scheduler.schedule_immediately(self.broker, super::broker::Event::NewRequest);
+                scheduler
+                    .schedule_immediately(self.broker, super::broker::Event::NewRequest(request));
             }
         }
     }
