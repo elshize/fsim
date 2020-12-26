@@ -61,13 +61,21 @@ struct Opt {
     query_events_path: PathBuf,
 
     /// Path to a file containing query events describing when queries arrrive at the broker.
-    #[clap(long, default_value = "16")]
+    #[clap(long, default_value = "8")]
     num_cores: NumCores,
 
     /// Path to a file containing node configuration in JSON array format.
     /// Each element (node) contains the IDs of shards it contains.
     #[clap(long)]
     nodes: PathBuf,
+
+    /// Output file where the query statistics will be stored in the CSV format.
+    #[clap(long)]
+    query_output: PathBuf,
+
+    /// Output file where the node-level statistics will be stored in the CSV format.
+    #[clap(long)]
+    node_output: PathBuf,
 
     /// Verbosity.
     #[clap(short, long, parse(from_occurrences))]
@@ -284,13 +292,13 @@ impl SimulationConfig {
     }
 
     /// Runs the simulation based on the given configuration.
-    fn run(&self) -> eyre::Result<()> {
+    fn run(&self, queries_output: File, nodes_output: File) -> eyre::Result<()> {
         let mut sim = Simulation::default();
 
         let (query_sender, receiver) = std::sync::mpsc::channel();
-        write_from_channel(io::BufWriter::new(File::create("queries.csv")?), receiver);
+        write_from_channel(io::BufWriter::new(queries_output), receiver);
         let (node_sender, receiver) = std::sync::mpsc::channel();
-        write_from_channel(io::BufWriter::new(File::create("nodes.csv")?), receiver);
+        write_from_channel(io::BufWriter::new(nodes_output), receiver);
 
         let query_log_id = sim.state.insert(
             QueryLog::new(sim.scheduler.clock(), Duration::from_secs(10))
@@ -390,7 +398,9 @@ fn set_up_logger(opt: &Opt) -> Result<(), fern::InitError> {
 fn main() -> eyre::Result<()> {
     color_eyre::install()?;
     let opt = Opt::parse();
+    let query_output = File::create(&opt.query_output)?;
+    let node_output = File::create(&opt.node_output)?;
     set_up_logger(&opt)?;
     let conf = SimulationConfig::try_from(opt)?;
-    conf.run()
+    conf.run(query_output, node_output)
 }
