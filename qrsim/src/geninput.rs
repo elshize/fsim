@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clap::Clap;
@@ -31,9 +32,9 @@ struct Opts {
     #[clap(long)]
     queries_per_second: f64,
 
-    /// Number of queries to draw from.
+    /// File containing the query IDs to draw from.
     #[clap(long)]
-    num_queries: usize,
+    query_ids: PathBuf,
 
     /// Time of intended simulation in microseconds.
     #[clap(short, long)]
@@ -48,12 +49,21 @@ struct Opts {
     format: Format,
 }
 
+fn load_ids(path: &Path) -> eyre::Result<Vec<usize>> {
+    Ok(std::fs::read_to_string(path)?
+        .lines()
+        .map(|l| l.parse::<usize>().wrap_err("unable to parse query ID"))
+        .collect::<eyre::Result<Vec<_>>>()?)
+}
+
 fn main() -> eyre::Result<()> {
     color_eyre::install()?;
     let opts: Opts = Opts::parse();
 
+    let ids = load_ids(&opts.query_ids)?;
+
     let micro_distr = Uniform::new(0, 1000);
-    let query_id_distr = Uniform::new(0, opts.num_queries);
+    let query_id_distr = Uniform::new(0, ids.len());
     let milli_distr = Poisson::new(opts.queries_per_second / 1000.0)
         .map_err(|_| eyre!("invalid lambda: {}", opts.queries_per_second))?;
 
@@ -63,7 +73,7 @@ fn main() -> eyre::Result<()> {
         ChaChaRng::from_entropy()
     };
 
-    let mut ids = 0_usize..;
+    let mut request_ids = 0_usize..;
 
     let stdout = std::io::stdout();
     let mut writer = stdout.lock();
@@ -71,10 +81,11 @@ fn main() -> eyre::Result<()> {
     for milli in 0..(opts.time.0.as_micros() / 1000) as u64 {
         let num_requests: f64 = milli_distr.sample(&mut rng);
         for _ in 0..(num_requests as usize) {
-            let query_id = QueryId::from(query_id_distr.sample(&mut rng));
+            let query_id = QueryId::from(ids[query_id_distr.sample(&mut rng)]);
             let micro = micro_distr.sample(&mut rng);
             let time = Duration::from_micros(micro + 1000 * milli);
-            let request_id = RequestId::from(ids.next().expect("value from infinite range"));
+            let request_id =
+                RequestId::from(request_ids.next().expect("value from infinite range"));
             let request = QueryRequest::new(request_id, query_id, time);
             let event = TimedEvent {
                 event: Event::Broker(BrokerEvent::NewRequest(request)),
