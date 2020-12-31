@@ -36,6 +36,7 @@ bincode = "1"
 rmp-serde = "0.15"
 ndarray = "0.14"
 optimization = { path = "../optimization" }
+thiserror = "1"
 
 [dev-dependencies]
 float-cmp = "0.8"

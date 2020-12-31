@@ -69,6 +69,10 @@ struct Opt {
     #[clap(long)]
     nodes: PathBuf,
 
+    /// Path to a file containing shard ranking scores for queries.
+    #[clap(long)]
+    shard_scores: Option<PathBuf>,
+
     /// Output file where the query statistics will be stored in the CSV format.
     #[clap(long)]
     query_output: PathBuf,
@@ -98,6 +102,7 @@ struct Opt {
 struct SimulationConfig {
     queries_path: PathBuf,
     query_events_path: PathBuf,
+    shard_scores_path: Option<PathBuf>,
 
     assignment: AssignmentResult,
 
@@ -126,6 +131,7 @@ impl TryFrom<Opt> for SimulationConfig {
         Ok(Self {
             queries_path: opt.queries_path,
             query_events_path: opt.query_events_path,
+            shard_scores_path: opt.shard_scores,
             num_cores: opt.num_cores,
             assignment,
             num_nodes,
@@ -135,22 +141,32 @@ impl TryFrom<Opt> for SimulationConfig {
     }
 }
 
-/// Cached query data.
-///
-/// The input data retrieved from PISA is slow to load, because it's bulky and need processing
-/// before it can be used in the simulation. Instead of introducing another explicit preprocessing
-/// phase and maintain another set of files, this program will do the required processing and cache
-/// the data on the drive. If the cache is found at the beginning of the simulation and is older
-/// than the file passed as the input, the cache will be loaded instead.
-///
-/// The cache is stored in the [Bincode](https://github.com/servo/bincode) format.
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-struct CachedQueries {
-    file_path: PathBuf,
-    queries: Vec<Query>,
+/// Metadata object containing file paths for [`CachedQueries`].
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub struct CacheMetadata {
+    /// The path to the cached metadata file.
+    pub file_path: PathBuf,
+    /// The path to the query input file.
+    pub query_input: PathBuf,
+    /// The path to the shard scores input file.
+    pub shard_scores_input: Option<PathBuf>,
 }
 
-impl CachedQueries {
+impl CacheMetadata {
+    /// Creates a new cache metadata from the given input files, where the second one is optional.
+    pub fn new<P1, P2>(query_input: P1, shard_scores_input: Option<P2>) -> eyre::Result<Self>
+    where
+        P1: Into<PathBuf>,
+        P2: Into<PathBuf>,
+    {
+        let query_input: PathBuf = query_input.into();
+        Ok(Self {
+            file_path: Self::cached_file_path(&query_input)?,
+            query_input,
+            shard_scores_input: shard_scores_input.map(|p| p.into()),
+        })
+    }
+
     /// Computes the path of the cached file for the input file at `file_path`.
     ///
     /// # Errors
@@ -166,53 +182,142 @@ impl CachedQueries {
                 .to_string_lossy()
         )))
     }
+}
+
+/// Cached query data.
+///
+/// The input data retrieved from PISA is slow to load, because it's bulky and need processing
+/// before it can be used in the simulation. Instead of introducing another explicit preprocessing
+/// phase and maintain another set of files, this program will do the required processing and cache
+/// the data on the drive. If the cache is found at the beginning of the simulation and is older
+/// than the file passed as the input, the cache will be loaded instead.
+///
+/// The cache is stored in the [Bincode](https://github.com/servo/bincode) format.
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+struct CachedQueries {
+    meta: CacheMetadata,
+    queries: Vec<Query>,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum CacheLoadError {
+    #[error("query cache not found")]
+    CacheNotFound,
+    #[error("Cache file found but it is older than the query input file.")]
+    NewerQueryInput,
+    #[error("Cache file found but it is older than the shard scores input file.")]
+    NewerShardScoreInput,
+    #[error("Cache file found but it was computed on a different shard scores input file.")]
+    DifferentShardScoreInput,
+    #[error("error while loading query cache: {0}")]
+    Io(#[from] eyre::Error),
+}
+
+impl CachedQueries {
+    /// Loads queries from a cached file.
+    ///
+    /// # Errors
+    ///
+    /// Returns one of the following types of error:
+    /// - [`CacheLoadError::CacheNotFound`] when cache file was not found.
+    /// - [`CacheLoadError::NewerQueryInput`] when the query input is newer than the cache.
+    /// - [`CacheLoadError::NewerShardScoreInput`] when the shard scores input is newer than the cache.
+    /// - [`CacheLoadError::DifferentShardScoreInput`] when the cache exists but the shard score
+    ///   file it was computed from is different from the one provided (or if one exists when the
+    ///   other does not).
+    /// - [`CacheLoadError::Io`] when any other errors occur while reading files and computing
+    ///   paths.
+    pub fn load(meta: &CacheMetadata) -> Result<Self, CacheLoadError> {
+        let cached_file = File::open(&meta.file_path).map_err(|_| CacheLoadError::CacheNotFound)?;
+        let query_input =
+            File::open(&meta.query_input).wrap_err("unable to open query input file")?;
+        let query_input_last_mod = query_input
+            .metadata()
+            .wrap_err("unable to retrieve query input metadata")?
+            .modified()
+            .wrap_err("unable to retrieve last modified date")?;
+        let cached_file_last_mod = cached_file
+            .metadata()
+            .wrap_err("unable to retrieve cached file metadata")?
+            .modified()
+            .wrap_err("unable to retrieve last modified date")?;
+        if query_input_last_mod <= cached_file_last_mod {
+            if let Some(shard_scores_input) = &meta.shard_scores_input {
+                let scores_input_last_mod = shard_scores_input
+                    .metadata()
+                    .wrap_err("unable to retrieve query input metadata")?
+                    .modified()
+                    .wrap_err("unable to retrieve last modified date")?;
+                if scores_input_last_mod > cached_file_last_mod {
+                    return Err(CacheLoadError::NewerShardScoreInput);
+                }
+            }
+            log::info!("Query cache detected. Loading cache...");
+            let cached: CachedQueries =
+                bincode::deserialize_from(cached_file).wrap_err("failed to parse cached file")?;
+            if cached.meta.shard_scores_input != meta.shard_scores_input {
+                Err(CacheLoadError::DifferentShardScoreInput)
+            } else {
+                log::info!("Cache loaded.");
+                Ok(cached)
+            }
+        } else {
+            Err(CacheLoadError::NewerQueryInput)
+        }
+    }
 
     /// Stores the query cache.
     fn store_cache(&self) -> eyre::Result<()> {
-        let cached_filename = Self::cached_file_path(&self.file_path)?;
-        bincode::serialize_into(File::create(cached_filename)?, self)?;
+        bincode::serialize_into(File::create(&self.meta.file_path)?, self)?;
         Ok(())
     }
 }
 
 impl SimulationConfig {
-    /// Loads queries from a cached file.
-    ///
-    /// Returns `None` if the cache does not exist, or is older than the requested query file.
-    /// See [`CachedQueries`] for more information.
-    fn queries_from_cache(&self) -> Option<Vec<Query>> {
-        let cached_filename = CachedQueries::cached_file_path(&self.queries_path).ok()?;
-        let input_file = File::open(&self.queries_path).ok()?;
-        let cached_file = File::open(cached_filename).ok()?;
-        if input_file.metadata().ok()?.modified().ok()?
-            <= cached_file.metadata().ok()?.modified().ok()?
-        {
-            log::info!("Query cache detected. Loading cache...");
-            let cached: CachedQueries = bincode::deserialize_from(cached_file).ok()?;
-            log::info!("Cache loaded.");
-            Some(cached.queries)
-        } else {
-            None
-        }
+    ///// Loads queries from a cached file.
+    /////
+    ///// Returns `None` if the cache does not exist, or is older than the requested query file.
+    ///// See [`CachedQueries`] for more information.
+    //fn queries_from_cache(&self) -> Option<Vec<Query>> {
+    //    let cached_filename = CachedQueries::cached_file_path(&self.queries_path).ok()?;
+    //    let input_file = File::open(&self.queries_path).ok()?;
+    //    let cached_file = File::open(cached_filename).ok()?;
+    //    if input_file.metadata().ok()?.modified().ok()?
+    //        <= cached_file.metadata().ok()?.modified().ok()?
+    //    {
+    //        log::info!("Query cache detected. Loading cache...");
+    //        let cached: CachedQueries = bincode::deserialize_from(cached_file).ok()?;
+    //        log::info!("Cache loaded.");
+    //        Some(cached.queries)
+    //    } else {
+    //        None
+    //    }
+    //}
+
+    fn load_shard_scores(meta: &CacheMetadata) -> eyre::Result<Option<Vec<Vec<f32>>>> {
+        meta.shard_scores_input
+            .as_ref()
+            .map(|path| -> eyre::Result<Vec<Vec<f32>>> {
+                log::info!("Queries sorted. Now processing...");
+                let file = File::open(path)?;
+                serde_json::Deserializer::from_reader(file)
+                    .into_iter::<Vec<f32>>()
+                    .map(|r| Ok(r?))
+                    .collect()
+            })
+            .transpose()
     }
 
-    /// Loads and preprocesses queries from the input file, or loads the previously preprocessed
-    /// cached file.
-    ///
-    /// See [`CachedQueries`] for more information.
-    fn queries(&self) -> eyre::Result<Vec<Query>> {
-        if let Some(queries) = self.queries_from_cache() {
-            return Ok(queries);
-        }
+    fn process_input_queries(meta: CacheMetadata) -> eyre::Result<CachedQueries> {
         let error_wrapper = || {
             format!(
                 "Failed to load queries from file: `{}`",
-                self.queries_path.display()
+                meta.query_input.display()
             )
         };
         log::info!("Reading, processing, and chaching query data. This could take some time.");
         log::info!("Reading query data...");
-        let file = File::open(&self.queries_path).wrap_err_with(error_wrapper)?;
+        let file = File::open(&meta.query_input).wrap_err_with(error_wrapper)?;
         let rows: eyre::Result<Vec<QueryRow>> = serde_json::Deserializer::from_reader(file)
             .into_iter::<QueryRow>()
             .map(|r| Ok(r?))
@@ -222,25 +327,50 @@ impl SimulationConfig {
         rows.sort_by(|lhs, rhs| {
             (&lhs.query_id, &lhs.shard_id).cmp(&(&rhs.query_id, &rhs.shard_id))
         });
+        let mut shard_scores_iter = Self::load_shard_scores(&meta)?.map(|v| v.into_iter());
+        let shard_scores = std::iter::from_fn(|| {
+            if let Some(iter) = &mut shard_scores_iter {
+                Some(iter.next())
+            } else {
+                Some(None)
+            }
+        });
         log::info!("Queries sorted. Now processing...");
         let queries = CachedQueries {
-            file_path: self.queries_path.clone(),
+            meta,
             queries: rows
                 .into_iter()
                 .group_by(|r| r.query_id)
                 .into_iter()
-                .map(|(_, rows)| {
+                .zip(shard_scores)
+                .map(|((_, rows), scores)| {
                     Query {
                         selection_time: 0, // TODO
                         selected_shards: None,
                         retrieval_times: rows.map(|r| r.time).collect(),
+                        shard_scores: scores,
                     }
                 })
                 .collect(),
         };
         log::info!("Queries processed. Now caching...");
         queries.store_cache()?;
-        Ok(queries.queries)
+        Ok(queries)
+    }
+
+    /// Loads and preprocesses queries from the input file, or loads the previously preprocessed
+    /// cached file.
+    ///
+    /// See [`CachedQueries`] for more information.
+    fn queries(&self) -> eyre::Result<CachedQueries> {
+        let meta = CacheMetadata::new(&self.queries_path, self.shard_scores_path.as_ref())?;
+        CachedQueries::load(&meta).or_else(|err| match err {
+            CacheLoadError::Io(err) => Err(err),
+            _ => {
+                log::warn!("{}", err);
+                Self::process_input_queries(meta)
+            }
+        })
     }
 
     /// Inserts the node components into `simulation`, and returns a vector of IDs of the
@@ -306,7 +436,7 @@ impl SimulationConfig {
                 .node_sender(node_sender),
         );
 
-        let queries = Rc::new(self.queries()?);
+        let queries = Rc::new(self.queries()?.queries);
         let query_events = read_query_events(&self.query_events_path)?;
 
         let node_incoming_queues: Vec<_> = (0..self.num_nodes).map(|_| sim.add_queue()).collect();
@@ -359,7 +489,7 @@ fn read_query_events(file_path: &Path) -> eyre::Result<Vec<qrsim::TimedEvent>> {
             .wrap_err("unable to parse query events in JSON format")
     } else {
         rmp_serde::from_read::<_, Vec<qrsim::TimedEvent>>(file)
-            .wrap_err("unable to parse query events in Bincode format")
+            .wrap_err("unable to parse query events in MsgPack format")
     }
 }
 

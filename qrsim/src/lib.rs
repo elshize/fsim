@@ -207,17 +207,22 @@ pub struct QueryRow {
 }
 
 /// Query data.
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct Query {
     /// Shards that will be selected for this query. If `None`, then all shards selected.
     pub selected_shards: Option<Vec<ShardId>>,
+
     /// Shard selection time.
     #[serde(default)]
     pub selection_time: u64,
+
     /// A list of retrieval times in all shards. This is the reference time that later can
     /// be scaled in nodes by multiplying by a retrieval speed factor.
     /// By default, though, all nodes are identical in terms of processing power.
     pub retrieval_times: Vec<u64>,
+
+    /// Shard scores for selective search and prioritizing shards during peak loads.
+    pub shard_scores: Option<Vec<f32>>,
 }
 
 /// A query request sent to the broker by the query generator.

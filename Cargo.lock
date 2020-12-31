@@ -957,6 +957,7 @@ dependencies = [
  "serde_json",
  "simrs",
  "strum",
+ "thiserror",
 ]
 
 [[package]]
