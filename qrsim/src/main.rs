@@ -470,7 +470,7 @@ impl SimulationConfig {
             }
         }
 
-        run_until(&mut sim, Duration::from_secs(60), query_log_id);
+        run_until(&mut sim, Duration::from_secs(600), query_log_id);
         Ok(())
     }
 }
