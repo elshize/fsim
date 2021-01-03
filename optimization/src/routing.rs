@@ -70,14 +70,14 @@ impl Optimizer for LpOptimizer {
             .gencolumns()
             .into_iter()
             .enumerate()
-            .map(|(shard, weights)| {
+            .map(|(shard_id, weights)| {
                 let shard_vars: Vec<_> = weights
                     .iter()
                     .enumerate()
-                    .map(|(node, _)| {
-                        LpContinuous::new(&format_dispatch_variable(shard, node))
+                    .map(|(node_id, weight)| {
+                        LpContinuous::new(&format_dispatch_variable(shard_id, node_id))
                             .lower_bound(0.0)
-                            .upper_bound(1.0)
+                            .upper_bound(if *weight == 0.0 { 0.0 } else { 1.0 })
                     })
                     .collect();
                 problem += lp_sum(&shard_vars).equal(1.0);

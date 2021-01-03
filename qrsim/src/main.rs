@@ -38,7 +38,9 @@ use qrsim::{
 type NodeComponentId = ComponentId<NodeEvent>;
 
 /// Type of dispatching policy.
-#[derive(strum::EnumString, strum::ToString, Serialize, Deserialize)]
+#[derive(
+    Debug, PartialEq, Eq, Clone, Copy, strum::EnumString, strum::ToString, Serialize, Deserialize,
+)]
 #[strum(serialize_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 enum DispatcherOption {
@@ -88,6 +90,10 @@ struct Opt {
     /// Dispatcher type.
     #[clap(short, long)]
     dispatcher: DispatcherOption,
+
+    /// File where to store the probability matrix solved by the probabilistic dispatcher.
+    #[clap(long)]
+    prob_matrix_output: Option<PathBuf>,
 
     /// Store the logs this file.
     #[clap(long)]
@@ -273,27 +279,81 @@ impl CachedQueries {
     }
 }
 
-impl SimulationConfig {
-    ///// Loads queries from a cached file.
-    /////
-    ///// Returns `None` if the cache does not exist, or is older than the requested query file.
-    ///// See [`CachedQueries`] for more information.
-    //fn queries_from_cache(&self) -> Option<Vec<Query>> {
-    //    let cached_filename = CachedQueries::cached_file_path(&self.queries_path).ok()?;
-    //    let input_file = File::open(&self.queries_path).ok()?;
-    //    let cached_file = File::open(cached_filename).ok()?;
-    //    if input_file.metadata().ok()?.modified().ok()?
-    //        <= cached_file.metadata().ok()?.modified().ok()?
-    //    {
-    //        log::info!("Query cache detected. Loading cache...");
-    //        let cached: CachedQueries = bincode::deserialize_from(cached_file).ok()?;
-    //        log::info!("Cache loaded.");
-    //        Some(cached.queries)
-    //    } else {
-    //        None
-    //    }
-    //}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct ProbabilityMatrixOtuput {
+    weights: Vec<Vec<f32>>,
+    probabilities: Vec<Vec<f32>>,
+    loads: Vec<Vec<f32>>,
+}
 
+impl ProbabilityMatrixOtuput {
+    fn new(
+        weights: ndarray::ArrayView2<f32>,
+        probabilities: ndarray::ArrayView2<f32>,
+    ) -> eyre::Result<Self> {
+        Self::validate(weights, probabilities)?;
+        Ok(Self {
+            weights: array_to_vec(weights),
+            probabilities: array_to_vec(probabilities),
+            loads: array_to_vec((weights.to_owned() * &probabilities).view()),
+        })
+    }
+
+    /// Validates the probability matrix with respect to the weights.
+    ///
+    /// To pass validation, the following must hold:
+    ///
+    /// 1. Each column in the probability matrix must sum up to (approximately) 1. Because of the
+    ///    finite precision of the floating point representation, this value must be within a
+    ///    certain error from 1.0.
+    /// 2. For any weight `w(i, j) = 0.0` (signifying that shard `j` is not assigned to machine `i`)
+    ///    `p(i, j)` must also be equal 0.0.
+    fn validate(
+        weights: ndarray::ArrayView2<f32>,
+        probabilities: ndarray::ArrayView2<f32>,
+    ) -> eyre::Result<()> {
+        for (column, (probabilities, weights)) in probabilities
+            .gencolumns()
+            .into_iter()
+            .zip(weights.gencolumns())
+            .enumerate()
+        {
+            let sum = probabilities.iter().zip(weights).enumerate().try_fold(
+                0.0,
+                |sum, (row, (p, w))| {
+                    if *w == 0.0 && *p > 0.0 {
+                        Err(eyre!(
+                            "weight at ({},{}) is 0 but probability is {}",
+                            row,
+                            column,
+                            p
+                        ))
+                    } else {
+                        Ok(sum + p)
+                    }
+                },
+            )?;
+            if (sum - 1.0).abs() > 0.0001 {
+                eyre::bail!(
+                    "probabilities for shard {} do not sum to 1 ({})",
+                    column,
+                    sum
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+fn array_to_vec(array: ndarray::ArrayView2<f32>) -> Vec<Vec<f32>> {
+    array
+        .genrows()
+        .into_iter()
+        .map(|row| row.into_iter().copied().collect())
+        .collect()
+}
+
+impl SimulationConfig {
     fn load_shard_scores(meta: &CacheMetadata) -> eyre::Result<Option<Vec<Vec<f32>>>> {
         meta.shard_scores_input
             .as_ref()
@@ -398,10 +458,15 @@ impl SimulationConfig {
     }
 
     /// Returns a dispatcher based on the configuration. See [`DispatcherOption`].
-    fn dispatcher(&self) -> Box<dyn Dispatch> {
+    ///
+    /// # Errors
+    ///
+    /// This function might return an error because if `matrix_output.is_some()`, then the result
+    /// of probability optimization will be stored in this file, and thus an I/O could occur.
+    fn dispatcher(&self, matrix_output: Option<File>) -> std::io::Result<Box<dyn Dispatch>> {
         match self.dispatcher {
             DispatcherOption::RoundRobin => {
-                Box::new(RoundRobinDispatcher::new(&self.assignment.nodes))
+                Ok(Box::new(RoundRobinDispatcher::new(&self.assignment.nodes)))
             }
             DispatcherOption::Probabilistic => {
                 let weights = Array2::from_shape_vec(
@@ -416,13 +481,28 @@ impl SimulationConfig {
                 .expect("invavlid nodes config");
                 let optimizer = LpOptimizer;
                 let probabilities = optimizer.optimize(weights.view());
-                Box::new(ProbabilisticDispatcher::new(probabilities.view()))
+                if let Some(file) = matrix_output {
+                    match ProbabilityMatrixOtuput::new(weights.view(), probabilities.view()) {
+                        Ok(matrix) => serde_json::to_writer(file, &matrix)?,
+                        Err(err) => panic!(
+                            "matrix validation failed: {} {:?}",
+                            err,
+                            array_to_vec(probabilities.t())
+                        ),
+                    }
+                }
+                Ok(Box::new(ProbabilisticDispatcher::new(probabilities.view())))
             }
         }
     }
 
     /// Runs the simulation based on the given configuration.
-    fn run(&self, queries_output: File, nodes_output: File) -> eyre::Result<()> {
+    fn run(
+        &self,
+        queries_output: File,
+        nodes_output: File,
+        matrix_output: Option<File>,
+    ) -> eyre::Result<()> {
         let mut sim = Simulation::default();
 
         let (query_sender, receiver) = std::sync::mpsc::channel();
@@ -458,7 +538,7 @@ impl SimulationConfig {
             },
             node_ids,
             queries: Rc::clone(&queries),
-            dispatcher: self.dispatcher(),
+            dispatcher: self.dispatcher(matrix_output)?,
             query_log_id,
             responses: responses_key,
         });
@@ -529,9 +609,17 @@ fn set_up_logger(opt: &Opt) -> Result<(), fern::InitError> {
 fn main() -> eyre::Result<()> {
     color_eyre::install()?;
     let opt = Opt::parse();
+    if opt.prob_matrix_output.is_some() && opt.dispatcher != DispatcherOption::Probabilistic {
+        eyre::bail!("matrix output given but dispatcher is not probabilistic");
+    }
+    let matrix_output = opt
+        .prob_matrix_output
+        .as_ref()
+        .map(|p| File::create(p))
+        .transpose()?;
     let query_output = File::create(&opt.query_output)?;
     let node_output = File::create(&opt.node_output)?;
     set_up_logger(&opt)?;
     let conf = SimulationConfig::try_from(opt)?;
-    conf.run(query_output, node_output)
+    conf.run(query_output, node_output, matrix_output)
 }
