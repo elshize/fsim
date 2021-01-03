@@ -604,6 +604,50 @@ fn print_legend() {
     }
 }
 
+/// Runs the simulation until no more events are present.
+pub fn run_events(simulation: &mut Simulation, num_queries: usize, key: Key<QueryLog>) -> Duration {
+    print_legend();
+    let pb = ProgressBar::new(num_queries as u64)
+        .with_style(ProgressStyle::default_bar().template("{msg} {wide_bar} {percent}%"));
+    let mut position = 0_u64;
+    while simulation.step() {
+        let time = simulation.scheduler.time();
+        let query_log = simulation
+            .state
+            .get_mut(key)
+            .expect("Missing query log in state");
+        let num_finished = query_log.finished_requests() as u64;
+        if position < num_finished {
+            position = num_finished;
+            pb.set_position(position);
+            pb.set_message(&format!(
+                "[{time}s] \
+                 [{waiting_label}={waiting}] \
+                 [{active_label}={active}] \
+                 [{dropped_label}={dropped}] \
+                 [{finished_label}={finished}] \
+                 [{current_throughput_label}={current}] \
+                 [{overall_throughput_label}={total}]",
+                time = time.as_secs(),
+                active = query_log.active_requests(),
+                finished = num_finished,
+                dropped = query_log.dropped_requests(),
+                waiting = query_log.waiting_requests(),
+                current = query_log.current_throughput().round(),
+                total = query_log.total_throughput().round(),
+                waiting_label = Label::Waiting.short(),
+                active_label = Label::Active.short(),
+                dropped_label = Label::Dropped.short(),
+                finished_label = Label::Finished.short(),
+                current_throughput_label = Label::CurrentThroughput.short(),
+                overall_throughput_label = Label::OverallThroughput.short(),
+            ));
+        }
+    }
+    pb.finish();
+    simulation.scheduler.time()
+}
+
 /// Runs for the specified time, and exits afterwards.
 pub fn run_until(simulation: &mut Simulation, time: Duration, key: Key<QueryLog>) -> Duration {
     print_legend();

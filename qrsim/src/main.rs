@@ -30,7 +30,7 @@ use simrs::{ComponentId, QueueId, Simulation};
 
 use optimization::{AssignmentResult, LpOptimizer, Optimizer};
 use qrsim::{
-    run_until, write_from_channel, Broker, BrokerEvent, BrokerQueues, Dispatch, Node, NodeEvent,
+    run_events, write_from_channel, Broker, BrokerEvent, BrokerQueues, Dispatch, Node, NodeEvent,
     NodeId, NodeRequest, NodeResponse, NumCores, ProbabilisticDispatcher, Query, QueryLog,
     QueryRow, RequestId, ResponseStatus, RoundRobinDispatcher,
 };
@@ -463,6 +463,7 @@ impl SimulationConfig {
             responses: responses_key,
         });
 
+        let num_queries = query_events.len();
         for event in query_events {
             match event.event {
                 qrsim::Event::Broker(e) => sim.schedule(event.time, broker, e),
@@ -470,7 +471,7 @@ impl SimulationConfig {
             }
         }
 
-        run_until(&mut sim, Duration::from_secs(600), query_log_id);
+        run_events(&mut sim, num_queries, query_log_id);
         Ok(())
     }
 }
