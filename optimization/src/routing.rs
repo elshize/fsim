@@ -84,10 +84,11 @@ impl Optimizer for LpOptimizer {
                 shard_vars
             })
             .collect();
-        for node in 0..weights.nrows() {
+        for (node, weights) in weights.genrows().into_iter().enumerate() {
             let node_vars: Vec<_> = dispatch_variables
                 .iter()
-                .map(|shard_vars| &shard_vars[node])
+                .zip(weights)
+                .map(|(shard_vars, &w)| &shard_vars[node] * w)
                 .collect();
             problem += lp_sum(&node_vars).le(&z);
         }
@@ -107,15 +108,49 @@ mod test {
     use super::*;
     use proptest::prelude::*;
 
+    #[test]
+    fn test_easy_dispatch() {
+        let weights: Array2<f32> = Array2::from_shape_vec(
+            (3, 6),
+            vec![
+                1.0, 1.0, 0.0, // Shard 1
+                0.0, 1.0, 1.0, // Shard 2
+                1.0, 0.0, 1.0, // Shard 3
+                1.0, 1.0, 0.0, // Shard 4
+                0.0, 1.0, 1.0, // Shard 5
+                1.0, 0.0, 1.0, // Shard 6
+            ],
+        )
+        .expect("unable to create array");
+        let dispatch = LpOptimizer.optimize(weights.view());
+        println!("{}", &dispatch);
+        for (sid, sum) in dispatch
+            .gencolumns()
+            .into_iter()
+            .map(|col| col.iter().sum::<f32>())
+            .enumerate()
+        {
+            assert_eq!(sum, 1.0, "prob sum for shard {} is {}", sid, sum);
+        }
+    }
+
     fn test_dispatch(weights: ArrayView2<'_, f32>) {
         let optimizer = LpOptimizer;
         let dispatch = optimizer.optimize(weights);
         assert!(dispatch.iter().all(|&v| v >= 0.0 && v <= 1.0));
-        dispatch
-            .genrows()
+        for (sid, sum) in dispatch
+            .gencolumns()
             .into_iter()
             .map(|row| row.iter().sum::<f32>())
-            .all(|s| approx::ulps_eq!(s, 1.0, max_ulps = 4, epsilon = f32::EPSILON));
+            .enumerate()
+        {
+            assert!(
+                approx::ulps_eq!(sum, 1.0, max_ulps = 4, epsilon = f32::EPSILON),
+                "prob sum for shard {} is {}",
+                sid,
+                sum
+            );
+        }
     }
 
     fn assignment(length: usize, replicas: usize) -> impl Strategy<Value = Vec<bool>> {
