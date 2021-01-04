@@ -46,6 +46,9 @@ type NodeComponentId = ComponentId<NodeEvent>;
 enum DispatcherOption {
     /// See [`RoundRobinDispatcher`].
     RoundRobin,
+    /// Dispatches uniformly across available machines. See [`ProbabilisticDispatcher`].
+    Uniform,
+    /// Dispatchers with optimized probabilities computed at the beginning of the simulation.
     /// See [`ProbabilisticDispatcher`].
     Probabilistic,
 }
@@ -457,6 +460,53 @@ impl SimulationConfig {
             .collect()
     }
 
+    fn optimized_probabilistic_dispatcher(
+        &self,
+        matrix_output: Option<File>,
+    ) -> std::io::Result<Box<dyn Dispatch>> {
+        let weights = Array2::from_shape_vec(
+            (self.num_nodes, self.num_shards),
+            self.assignment
+                .weights
+                .iter()
+                .flatten()
+                .copied()
+                .collect_vec(),
+        )
+        .expect("invavlid nodes config");
+        let optimizer = LpOptimizer;
+        let probabilities = optimizer.optimize(weights.view());
+        if let Some(file) = matrix_output {
+            match ProbabilityMatrixOtuput::new(weights.view(), probabilities.view()) {
+                Ok(matrix) => serde_json::to_writer(file, &matrix)?,
+                Err(err) => panic!(
+                    "matrix validation failed: {} {:?}",
+                    err,
+                    array_to_vec(probabilities.t())
+                ),
+            }
+        }
+        Ok(Box::new(ProbabilisticDispatcher::new(probabilities.view())))
+    }
+
+    fn uniform_probabilistic_dispatcher(&self) -> std::io::Result<Box<dyn Dispatch>> {
+        let probabilities = Array2::from_shape_vec(
+            (self.num_nodes, self.num_shards),
+            self.assignment
+                .weights
+                .iter()
+                .flat_map(|node_weights| {
+                    let len = node_weights.len();
+                    node_weights
+                        .iter()
+                        .map(move |&w| if w > 0.0 { 1.0 / len as f32 } else { 0.0 })
+                })
+                .collect_vec(),
+        )
+        .expect("invavlid nodes config");
+        Ok(Box::new(ProbabilisticDispatcher::new(probabilities.view())))
+    }
+
     /// Returns a dispatcher based on the configuration. See [`DispatcherOption`].
     ///
     /// # Errors
@@ -469,30 +519,9 @@ impl SimulationConfig {
                 Ok(Box::new(RoundRobinDispatcher::new(&self.assignment.nodes)))
             }
             DispatcherOption::Probabilistic => {
-                let weights = Array2::from_shape_vec(
-                    (self.num_nodes, self.num_shards),
-                    self.assignment
-                        .weights
-                        .iter()
-                        .flatten()
-                        .copied()
-                        .collect_vec(),
-                )
-                .expect("invavlid nodes config");
-                let optimizer = LpOptimizer;
-                let probabilities = optimizer.optimize(weights.view());
-                if let Some(file) = matrix_output {
-                    match ProbabilityMatrixOtuput::new(weights.view(), probabilities.view()) {
-                        Ok(matrix) => serde_json::to_writer(file, &matrix)?,
-                        Err(err) => panic!(
-                            "matrix validation failed: {} {:?}",
-                            err,
-                            array_to_vec(probabilities.t())
-                        ),
-                    }
-                }
-                Ok(Box::new(ProbabilisticDispatcher::new(probabilities.view())))
+                self.optimized_probabilistic_dispatcher(matrix_output)
             }
+            DispatcherOption::Uniform => self.uniform_probabilistic_dispatcher(),
         }
     }
 

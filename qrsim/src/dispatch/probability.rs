@@ -6,7 +6,7 @@ use rand_chacha::{rand_core::SeedableRng, ChaChaRng};
 use rand_distr::weighted_alias::WeightedAliasIndex;
 use rand_distr::Distribution;
 
-/// Dispatches in a round-robin fashion.
+/// Dispatches according to given probabilities.
 pub struct ProbabilisticDispatcher {
     shards: Vec<WeightedAliasIndex<f32>>,
     num_nodes: usize,
