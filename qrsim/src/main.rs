@@ -13,6 +13,7 @@
     clippy::inline_always
 )]
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fs::File;
@@ -64,6 +65,10 @@ struct Opt {
     /// Path to a file containing query events describing when queries arrrive at the broker.
     #[clap(long)]
     query_events_path: PathBuf,
+
+    /// List of nodes to disable at the beginning of the simulation.
+    #[clap(long)]
+    disabled_nodes: Vec<NodeId>,
 
     /// Path to a file containing query events describing when queries arrrive at the broker.
     #[clap(long, default_value = "8")]
@@ -122,6 +127,7 @@ struct SimulationConfig {
     num_shards: usize,
 
     dispatcher: DispatcherOption,
+    disabled_nodes: Vec<NodeId>,
 }
 
 impl TryFrom<Opt> for SimulationConfig {
@@ -146,6 +152,7 @@ impl TryFrom<Opt> for SimulationConfig {
             num_nodes,
             num_shards: max_shard + 1,
             dispatcher: opt.dispatcher,
+            disabled_nodes: opt.disabled_nodes,
         })
     }
 }
@@ -560,6 +567,10 @@ impl SimulationConfig {
         let responses_key = sim
             .state
             .insert(HashMap::<RequestId, ResponseStatus>::new());
+        let mut dispatcher = self.dispatcher(matrix_output)?;
+        for &node_id in &self.disabled_nodes {
+            dispatcher.disable_node(node_id);
+        }
         let broker = sim.add_component(Broker {
             queues: BrokerQueues {
                 node: node_incoming_queues.iter().copied().collect(),
@@ -567,7 +578,7 @@ impl SimulationConfig {
             },
             node_ids,
             queries: Rc::clone(&queries),
-            dispatcher: self.dispatcher(matrix_output)?,
+            dispatcher: RefCell::new(dispatcher),
             query_log_id,
             responses: responses_key,
         });

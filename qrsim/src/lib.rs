@@ -18,7 +18,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use delegate::delegate;
-use derive_more::{Display, From, Into};
+use derive_more::{Display, From, FromStr, Into};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use simrs::{Key, Simulation};
@@ -134,6 +134,7 @@ pub struct ShardId(usize);
     Clone,
     Hash,
     Display,
+    FromStr,
 )]
 pub struct NodeId(usize);
 

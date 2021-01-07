@@ -1,8 +1,9 @@
 use crate::{
-    node, BrokerRequest, Dispatch, NodeRequest, NodeResponse, Query, QueryLog, QueryRequest,
-    QueryResponse, RequestId, ShardId,
+    node, BrokerRequest, Dispatch, NodeId, NodeRequest, NodeResponse, Query, QueryLog,
+    QueryRequest, QueryResponse, RequestId, ShardId,
 };
 
+use std::cell::RefCell;
 use std::collections::{hash_map::Entry, HashMap};
 use std::rc::Rc;
 use std::time::Duration;
@@ -31,6 +32,8 @@ pub enum Event {
     },
     /// New response has been received from a node to the queue.
     Response,
+    /// Node is no longer available for dispatch.
+    DisableNode(NodeId),
 }
 
 /// Information about received and dropped responses to a request.
@@ -74,7 +77,7 @@ pub struct Broker {
     /// A reference to the list of all available queries, used to access times.
     pub queries: Rc<Vec<Query>>,
     /// The routing policy.
-    pub dispatcher: Box<dyn Dispatch>,
+    pub dispatcher: RefCell<Box<dyn Dispatch>>,
     /// The key to the map of all responses, used to track when each query is fully processed.
     pub responses: Key<HashMap<RequestId, ResponseStatus>>,
     /// The key of the query log for status updates.
@@ -113,6 +116,9 @@ impl Component for Broker {
                 if let Some(response) = state.recv(self.queues.response) {
                     self.process_response(self_id, scheduler, state, response)
                 }
+            }
+            Event::DisableNode(node_id) => {
+                self.dispatcher.borrow_mut().disable_node(*node_id);
             }
         }
     }
@@ -154,7 +160,7 @@ impl Broker {
         let query = &self.queries[usize::from(request.query_id)];
         let selection_time = Duration::from_micros(query.selection_time);
         let shards: Vec<ShardId> = query.selected_shards.clone().unwrap_or_else(|| {
-            (0..self.dispatcher.num_shards())
+            (0..self.dispatcher.borrow().num_shards())
                 .map(ShardId::from)
                 .collect()
         });
@@ -213,7 +219,7 @@ impl Broker {
         let dispatch_overhead = Duration::from_micros(0);
         let mut response_status = ResponseStatus::new(shards.len());
         let request = Rc::new(request);
-        for (shard_id, node_id) in self.dispatcher.dispatch(&shards) {
+        for (shard_id, node_id) in self.dispatcher.borrow().dispatch(&shards) {
             let queue = self.queues.node[usize::from(node_id)];
             let request = NodeRequest::new(Rc::clone(&request), shard_id, scheduler.time());
             if state.send(queue, (request.clone(), self_id)).is_ok() {

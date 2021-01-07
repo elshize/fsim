@@ -14,5 +14,10 @@ impl Dispatch for DummyDispatcher {
     fn num_shards(&self) -> usize {
         0
     }
+    fn disable_node(&mut self, _: NodeId) -> bool {
+        false
+    }
+    fn enable_node(&mut self, _: NodeId) -> bool {
+        false
+    }
 }
-
