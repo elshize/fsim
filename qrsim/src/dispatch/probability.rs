@@ -1,12 +1,15 @@
+use super::{Dispatch, NodeId, ShardId};
+
 use std::cell::RefCell;
 
-use super::{Dispatch, NodeId, ShardId};
+use eyre::{Result, WrapErr};
 use ndarray::{Array1, Array2, ArrayView2};
 use optimization::Optimizer;
 use rand_chacha::{rand_core::SeedableRng, ChaChaRng};
 use rand_distr::weighted_alias::WeightedAliasIndex;
 use rand_distr::Distribution;
 
+#[derive(Debug)]
 struct Weight {
     value: f32,
     multiplier: f32,
@@ -61,12 +64,12 @@ pub struct ProbabilisticDispatcher {
     weight_matrix: Option<WeightMatrix>,
 }
 
-fn calc_distributions(weights: &[Vec<Weight>]) -> Vec<WeightedAliasIndex<f32>> {
+fn calc_distributions(weights: &[Vec<Weight>]) -> Result<Vec<WeightedAliasIndex<f32>>> {
     weights
         .iter()
         .map(|weights| {
             WeightedAliasIndex::new(weights.into_iter().map(Weight::value).collect())
-                .expect("invalid probabilities")
+                .wrap_err_with(|| format!("invalid probabilities: {:?}", weights))
         })
         .collect()
 }
@@ -91,53 +94,53 @@ fn probabilities_to_weights(probabilities: ArrayView2<'_, f32>) -> Vec<Vec<Weigh
 impl ProbabilisticDispatcher {
     /// Constructs a new probabilistic dispatcher from the given dispatch matrix.
     #[must_use]
-    pub fn new(probabilities: ArrayView2<'_, f32>) -> Self {
+    pub fn new(probabilities: ArrayView2<'_, f32>) -> Result<Self> {
         Self::with_rng(probabilities, ChaChaRng::from_entropy())
     }
 
     /// Constructs a new probabilistic dispatcher from the given dispatch matrix,
     /// and initializes the internal PRNG from the given seed.
     #[must_use]
-    pub fn with_seed(probabilities: ArrayView2<'_, f32>, seed: u64) -> Self {
+    pub fn with_seed(probabilities: ArrayView2<'_, f32>, seed: u64) -> Result<Self> {
         Self::with_rng(probabilities, ChaChaRng::seed_from_u64(seed))
     }
 
     /// Constructs a new probabilistic dispatcher from the given dispatch matrix,
     /// and initializes the internal PRNG from the given seed.
     #[must_use]
-    pub fn with_rng(probabilities: ArrayView2<'_, f32>, rng: ChaChaRng) -> Self {
+    pub fn with_rng(probabilities: ArrayView2<'_, f32>, rng: ChaChaRng) -> Result<Self> {
         let num_nodes = probabilities.nrows();
         let weights: Vec<_> = probabilities_to_weights(probabilities);
-        Self {
+        Ok(Self {
             num_nodes,
             rng: RefCell::new(rng),
-            shards: calc_distributions(&weights),
+            shards: calc_distributions(&weights)?,
             weights,
             weight_matrix: None,
-        }
+        })
     }
 
     /// Constructs a new dispatcher that optimizes probabilities based on the given weight matrix,
     /// and then repeats the optimization process each time there is a change indicated, such as
     /// disabling or enabling a node.
-    pub fn adaptive(weight_matrix: Array2<f32>) -> Self {
+    pub fn adaptive(weight_matrix: Array2<f32>) -> Result<Self> {
         Self::adaptive_with_rng(weight_matrix, ChaChaRng::from_entropy())
     }
 
     /// Constructs a new adaptive dispatcher with a random seed. See [`Self::adaptive`].
-    pub fn adaptive_with_seed(weight_matrix: Array2<f32>, seed: u64) -> Self {
+    pub fn adaptive_with_seed(weight_matrix: Array2<f32>, seed: u64) -> Result<Self> {
         Self::adaptive_with_rng(weight_matrix, ChaChaRng::seed_from_u64(seed))
     }
 
     /// Constructs a new adaptive dispatcher with a PRNG. See [`Self::adaptive`].
-    pub fn adaptive_with_rng(weight_matrix: Array2<f32>, rng: ChaChaRng) -> Self {
+    pub fn adaptive_with_rng(weight_matrix: Array2<f32>, rng: ChaChaRng) -> Result<Self> {
         let probabilities = optimization::LpOptimizer.optimize(weight_matrix.view());
-        let mut dispatcher = Self::with_rng(probabilities.view(), rng);
+        let mut dispatcher = Self::with_rng(probabilities.view(), rng)?;
         dispatcher.weight_matrix = Some(WeightMatrix::new(weight_matrix));
-        dispatcher
+        Ok(dispatcher)
     }
 
-    fn change_weight_status<F, G>(&mut self, node_id: NodeId, f: F, cond: G) -> bool
+    fn change_weight_status<F, G>(&mut self, node_id: NodeId, f: F, cond: G) -> Result<bool>
     where
         F: Fn(&mut Weight) -> bool,
         G: Fn(f32) -> bool,
@@ -149,10 +152,10 @@ impl ProbabilisticDispatcher {
                 let probabilities =
                     optimization::LpOptimizer.optimize(weight_matrix.weights().view());
                 self.weights = probabilities_to_weights(probabilities.view());
-                self.shards = calc_distributions(&self.weights);
-                true
+                self.shards = calc_distributions(&self.weights)?;
+                Ok(true)
             } else {
-                false
+                Ok(false)
             }
         } else {
             let changed = self
@@ -160,9 +163,9 @@ impl ProbabilisticDispatcher {
                 .iter_mut()
                 .any(|weights| f(&mut weights[node_id.0]));
             if changed {
-                self.shards = calc_distributions(&self.weights);
+                self.shards = calc_distributions(&self.weights)?;
             }
-            changed
+            Ok(changed)
         }
     }
 }
@@ -188,10 +191,22 @@ impl Dispatch for ProbabilisticDispatcher {
     }
 
     fn disable_node(&mut self, node_id: NodeId) -> bool {
+        let msg = "unable to disable node";
         self.change_weight_status(node_id, Weight::disable, |n| n == 1.0)
+            .wrap_err(msg)
+            .unwrap_or_else(|e| {
+                log::error!("{}", e);
+                panic!(msg);
+            })
     }
 
     fn enable_node(&mut self, node_id: NodeId) -> bool {
+        let msg = "unable to enable node";
         self.change_weight_status(node_id, Weight::enable, |n| n == 0.0)
+            .wrap_err(msg)
+            .unwrap_or_else(|e| {
+                log::error!("{}", e);
+                panic!(msg);
+            })
     }
 }

@@ -470,7 +470,7 @@ impl SimulationConfig {
     fn optimized_probabilistic_dispatcher(
         &self,
         matrix_output: Option<File>,
-    ) -> std::io::Result<Box<dyn Dispatch>> {
+    ) -> eyre::Result<Box<dyn Dispatch>> {
         let weights = Array2::from_shape_vec(
             (self.num_nodes, self.num_shards),
             self.assignment
@@ -493,10 +493,12 @@ impl SimulationConfig {
                 ),
             }
         }
-        Ok(Box::new(ProbabilisticDispatcher::new(probabilities.view())))
+        Ok(Box::new(ProbabilisticDispatcher::new(
+            probabilities.view(),
+        )?))
     }
 
-    fn uniform_probabilistic_dispatcher(&self) -> std::io::Result<Box<dyn Dispatch>> {
+    fn uniform_probabilistic_dispatcher(&self) -> eyre::Result<Box<dyn Dispatch>> {
         let probabilities = Array2::from_shape_vec(
             (self.num_nodes, self.num_shards),
             self.assignment
@@ -511,7 +513,9 @@ impl SimulationConfig {
                 .collect_vec(),
         )
         .expect("invavlid nodes config");
-        Ok(Box::new(ProbabilisticDispatcher::new(probabilities.view())))
+        Ok(Box::new(ProbabilisticDispatcher::new(
+            probabilities.view(),
+        )?))
     }
 
     /// Returns a dispatcher based on the configuration. See [`DispatcherOption`].
@@ -520,7 +524,7 @@ impl SimulationConfig {
     ///
     /// This function might return an error because if `matrix_output.is_some()`, then the result
     /// of probability optimization will be stored in this file, and thus an I/O could occur.
-    fn dispatcher(&self, matrix_output: Option<File>) -> std::io::Result<Box<dyn Dispatch>> {
+    fn dispatcher(&self, matrix_output: Option<File>) -> eyre::Result<Box<dyn Dispatch>> {
         match self.dispatcher {
             DispatcherOption::RoundRobin => {
                 Ok(Box::new(RoundRobinDispatcher::new(&self.assignment.nodes)))
