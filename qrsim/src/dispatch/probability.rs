@@ -60,6 +60,7 @@ pub struct ProbabilisticDispatcher {
     shards: Vec<WeightedAliasIndex<f32>>,
     weights: Vec<Vec<Weight>>,
     num_nodes: usize,
+    num_shards: usize,
     rng: RefCell<ChaChaRng>,
     weight_matrix: Option<WeightMatrix>,
 }
@@ -110,9 +111,12 @@ impl ProbabilisticDispatcher {
     #[must_use]
     pub fn with_rng(probabilities: ArrayView2<'_, f32>, rng: ChaChaRng) -> Result<Self> {
         let num_nodes = probabilities.nrows();
+        let num_shards = probabilities.ncols();
         let weights: Vec<_> = probabilities_to_weights(probabilities);
+        debug_assert_eq!(weights.len(), num_shards);
         Ok(Self {
             num_nodes,
+            num_shards,
             rng: RefCell::new(rng),
             shards: calc_distributions(&weights)?,
             weights,
@@ -153,17 +157,22 @@ impl ProbabilisticDispatcher {
                     optimization::LpOptimizer.optimize(weight_matrix.weights().view());
                 self.weights = probabilities_to_weights(probabilities.view());
                 self.shards = calc_distributions(&self.weights)?;
+                debug_assert_eq!(self.weights.len(), self.num_shards);
+                debug_assert_eq!(self.shards.len(), self.num_shards);
                 Ok(true)
             } else {
                 Ok(false)
             }
         } else {
-            let changed = self
-                .weights
-                .iter_mut()
-                .any(|weights| f(&mut weights[node_id.0]));
+            let num_nodes = self.num_nodes;
+            let changed = self.weights.iter_mut().any(|weights| {
+                debug_assert_eq!(weights.len(), num_nodes);
+                f(&mut weights[node_id.0])
+            });
             if changed {
                 self.shards = calc_distributions(&self.weights)?;
+                debug_assert_eq!(self.weights.len(), self.num_shards);
+                debug_assert_eq!(self.shards.len(), self.num_shards);
             }
             Ok(changed)
         }
