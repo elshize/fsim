@@ -195,7 +195,7 @@ impl Dispatch for ProbabilisticDispatcher {
         self.change_weight_status(node_id, Weight::disable, |n| n == 1.0)
             .wrap_err(msg)
             .unwrap_or_else(|e| {
-                log::error!("{}", e);
+                log::error!("{:#}", e);
                 panic!(msg);
             })
     }
@@ -205,7 +205,7 @@ impl Dispatch for ProbabilisticDispatcher {
         self.change_weight_status(node_id, Weight::enable, |n| n == 0.0)
             .wrap_err(msg)
             .unwrap_or_else(|e| {
-                log::error!("{}", e);
+                log::error!("{:#}", e);
                 panic!(msg);
             })
     }
