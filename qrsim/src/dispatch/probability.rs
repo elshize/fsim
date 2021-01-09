@@ -65,12 +65,20 @@ pub struct ProbabilisticDispatcher {
     weight_matrix: Option<WeightMatrix>,
 }
 
+fn invalid_probabilities_msg(weights: &[Weight]) -> String {
+    use itertools::Itertools;
+    format!(
+        "invalid probabilities: {}",
+        weights.iter().map(|w| w.value * w.multiplier).format(",")
+    )
+}
+
 fn calc_distributions(weights: &[Vec<Weight>]) -> Result<Vec<WeightedAliasIndex<f32>>> {
     weights
         .iter()
         .map(|weights| {
             WeightedAliasIndex::new(weights.into_iter().map(Weight::value).collect())
-                .wrap_err_with(|| format!("invalid probabilities: {:?}", weights))
+                .wrap_err_with(|| invalid_probabilities_msg(&weights))
         })
         .collect()
 }
