@@ -480,7 +480,12 @@ impl SimulationConfig {
                 .copied()
                 .collect_vec(),
         )
-        .expect("invavlid nodes config");
+        .wrap_err("invavlid nodes config")?;
+        log::debug!(
+            "Optimizing dispatch based on weights with {} shards and {} nodes",
+            weights.ncols(),
+            weights.nrows()
+        );
         let optimizer = LpOptimizer;
         let probabilities = optimizer.optimize(weights.view());
         if let Some(file) = matrix_output {
