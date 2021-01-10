@@ -71,8 +71,8 @@ impl Dispatch for RoundRobinDispatcher {
     fn num_shards(&self) -> usize {
         self.shards.len()
     }
-    fn disable_node(&mut self, node_id: NodeId) -> bool {
-        self.disabled_nodes.insert(node_id)
+    fn disable_node(&mut self, node_id: NodeId) -> eyre::Result<bool> {
+        Ok(self.disabled_nodes.insert(node_id))
     }
     fn enable_node(&mut self, node_id: NodeId) -> bool {
         self.disabled_nodes.remove(&node_id)

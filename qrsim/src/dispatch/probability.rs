@@ -65,21 +65,20 @@ pub struct ProbabilisticDispatcher {
     weight_matrix: Option<WeightMatrix>,
 }
 
-fn invalid_probabilities_msg(weights: &[Weight]) -> String {
+fn format_weights(weights: &[Weight]) -> String {
     use itertools::Itertools;
     format!(
-        "invalid probabilities: {}",
+        "{}",
         weights.iter().map(|w| w.value * w.multiplier).format(",")
     )
 }
 
-fn calc_distributions(weights: &[Vec<Weight>]) -> Result<Vec<WeightedAliasIndex<f32>>> {
+fn calc_distributions(
+    weights: &[Vec<Weight>],
+) -> Result<Vec<WeightedAliasIndex<f32>>, rand_distr::WeightedError> {
     weights
         .iter()
-        .map(|weights| {
-            WeightedAliasIndex::new(weights.into_iter().map(Weight::value).collect())
-                .wrap_err_with(|| invalid_probabilities_msg(&weights))
-        })
+        .map(|weights| WeightedAliasIndex::new(weights.into_iter().map(Weight::value).collect()))
         .collect()
 }
 
@@ -155,7 +154,12 @@ impl ProbabilisticDispatcher {
         Ok(dispatcher)
     }
 
-    fn change_weight_status<F, G>(&mut self, node_id: NodeId, f: F, cond: G) -> Result<bool>
+    fn change_weight_status<F, G>(
+        &mut self,
+        node_id: NodeId,
+        f: F,
+        cond: G,
+    ) -> Result<bool, rand_distr::WeightedError>
     where
         F: Fn(&mut Weight) -> bool,
         G: Fn(f32) -> bool,
@@ -210,13 +214,15 @@ impl Dispatch for ProbabilisticDispatcher {
         self.num_shards
     }
 
-    fn disable_node(&mut self, node_id: NodeId) -> bool {
-        let msg = "unable to disable node";
+    fn disable_node(&mut self, node_id: NodeId) -> Result<bool> {
         self.change_weight_status(node_id, Weight::disable, |n| n == 1.0)
-            .wrap_err(msg)
-            .unwrap_or_else(|e| {
-                log::error!("{:#}", e);
-                panic!(msg);
+            .wrap_err_with(|| {
+                format!(
+                    "unable to disable node {} (out of {}) with the following weights: {}",
+                    node_id,
+                    self.num_nodes(),
+                    format_weights(&self.weights[node_id.0]),
+                )
             })
     }
 

@@ -118,7 +118,13 @@ impl Component for Broker {
                 }
             }
             Event::DisableNode(node_id) => {
-                self.dispatcher.borrow_mut().disable_node(*node_id);
+                self.dispatcher
+                    .borrow_mut()
+                    .disable_node(*node_id)
+                    .unwrap_or_else(|err| {
+                        log::error!("{}", err);
+                        panic!();
+                    });
             }
         }
     }

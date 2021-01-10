@@ -14,8 +14,8 @@ impl Dispatch for DummyDispatcher {
     fn num_shards(&self) -> usize {
         0
     }
-    fn disable_node(&mut self, _: NodeId) -> bool {
-        false
+    fn disable_node(&mut self, _: NodeId) -> eyre::Result<bool> {
+        Ok(false)
     }
     fn enable_node(&mut self, _: NodeId) -> bool {
         false

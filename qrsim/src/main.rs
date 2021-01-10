@@ -573,7 +573,7 @@ impl SimulationConfig {
             .insert(HashMap::<RequestId, ResponseStatus>::new());
         let mut dispatcher = self.dispatcher(matrix_output)?;
         for &node_id in &self.disabled_nodes {
-            dispatcher.disable_node(node_id);
+            dispatcher.disable_node(node_id)?;
         }
         let broker = sim.add_component(Broker {
             queues: BrokerQueues {
