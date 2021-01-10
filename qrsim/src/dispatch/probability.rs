@@ -124,6 +124,11 @@ impl ProbabilisticDispatcher {
         for w in &weights {
             debug_assert_eq!(w.len(), num_nodes);
         }
+        log::debug!(
+            "Created probabilistic dispatcher with {} shards and {} nodes",
+            num_shards,
+            num_nodes
+        );
         Ok(Self {
             num_nodes,
             num_shards,
