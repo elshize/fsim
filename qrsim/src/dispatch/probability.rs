@@ -122,6 +122,9 @@ impl ProbabilisticDispatcher {
         let num_shards = probabilities.ncols();
         let weights: Vec<_> = probabilities_to_weights(probabilities);
         debug_assert_eq!(weights.len(), num_shards);
+        for w in &weights {
+            debug_assert_eq!(w.len(), num_nodes);
+        }
         Ok(Self {
             num_nodes,
             num_shards,
@@ -204,7 +207,7 @@ impl Dispatch for ProbabilisticDispatcher {
     }
 
     fn num_shards(&self) -> usize {
-        self.shards.len()
+        self.num_shards
     }
 
     fn disable_node(&mut self, node_id: NodeId) -> bool {
