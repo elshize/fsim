@@ -218,9 +218,10 @@ impl Dispatch for ProbabilisticDispatcher {
         self.change_weight_status(node_id, Weight::disable, |n| n == 1.0)
             .wrap_err_with(|| {
                 format!(
-                    "unable to disable node {} (out of {}) with the following weights: {}",
+                    "unable to disable node {} (#nodes: {}; #shards: {}) with the following weights: {}",
                     node_id,
                     self.num_nodes(),
+                    self.num_shards(),
                     format_weights(&self.weights[node_id.0]),
                 )
             })
