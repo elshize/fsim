@@ -498,8 +498,8 @@ impl SimulationConfig {
                 ),
             }
         }
-        Ok(Box::new(ProbabilisticDispatcher::new(
-            probabilities.view(),
+        Ok(Box::new(ProbabilisticDispatcher::adaptive(
+            probabilities,
         )?))
     }
 
