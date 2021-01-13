@@ -469,7 +469,7 @@ impl SimulationConfig {
 
     fn optimized_probabilistic_dispatcher(
         &self,
-        matrix_output: Option<File>,
+        _matrix_output: Option<File>,
     ) -> eyre::Result<Box<dyn Dispatch>> {
         let weights = Array2::from_shape_vec(
             (self.num_nodes, self.num_shards),
@@ -481,26 +481,24 @@ impl SimulationConfig {
                 .collect_vec(),
         )
         .wrap_err("invavlid nodes config")?;
-        log::debug!(
-            "Optimizing dispatch based on weights with {} shards and {} nodes",
-            weights.ncols(),
-            weights.nrows()
-        );
-        let optimizer = LpOptimizer;
-        let probabilities = optimizer.optimize(weights.view());
-        if let Some(file) = matrix_output {
-            match ProbabilityMatrixOtuput::new(weights.view(), probabilities.view()) {
-                Ok(matrix) => serde_json::to_writer(file, &matrix)?,
-                Err(err) => panic!(
-                    "matrix validation failed: {} {:?}",
-                    err,
-                    array_to_vec(probabilities.t())
-                ),
-            }
-        }
-        Ok(Box::new(ProbabilisticDispatcher::adaptive(
-            probabilities,
-        )?))
+        // log::debug!(
+        //     "Optimizing dispatch based on weights with {} shards and {} nodes",
+        //     weights.ncols(),
+        //     weights.nrows()
+        // );
+        // let optimizer = LpOptimizer;
+        // let probabilities = optimizer.optimize(weights.view());
+        // if let Some(file) = matrix_output {
+        //     match ProbabilityMatrixOtuput::new(weights.view(), probabilities.view()) {
+        //         Ok(matrix) => serde_json::to_writer(file, &matrix)?,
+        //         Err(err) => panic!(
+        //             "matrix validation failed: {} {:?}",
+        //             err,
+        //             array_to_vec(probabilities.t())
+        //         ),
+        //     }
+        // }
+        Ok(Box::new(ProbabilisticDispatcher::adaptive(weights)?))
     }
 
     fn uniform_probabilistic_dispatcher(&self) -> eyre::Result<Box<dyn Dispatch>> {

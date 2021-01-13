@@ -37,6 +37,7 @@ impl Weight {
     }
 }
 
+#[derive(Debug, PartialEq)]
 struct WeightMatrix {
     weights: Array2<f32>,
     nodes: Array1<f32>,
@@ -240,5 +241,31 @@ impl Dispatch for ProbabilisticDispatcher {
                 log::error!("{:#}", e);
                 panic!(msg);
             })
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_probabilistic_dispatcher() -> Result<()> {
+        let weight_matrix = ndarray::arr2(&[[0.5, 0.5, 0.0], [0.0, 0.5, 0.5], [0.5, 0.0, 0.5]]);
+        let mut dispatcher = ProbabilisticDispatcher::adaptive(weight_matrix.clone())?;
+        assert_eq!(
+            weight_matrix,
+            dispatcher.weight_matrix.as_ref().unwrap().weights()
+        );
+        assert!(dispatcher.disable_node(NodeId::from(0))?);
+        assert_eq!(
+            ndarray::arr2(&[[0.0, 0.0, 0.0], [0.0, 0.5, 0.5], [0.5, 0.0, 0.5]]),
+            dispatcher.weight_matrix.as_ref().unwrap().weights()
+        );
+        assert!(dispatcher.enable_node(NodeId::from(0)));
+        assert_eq!(
+            weight_matrix,
+            dispatcher.weight_matrix.as_ref().unwrap().weights()
+        );
+        Ok(())
     }
 }
