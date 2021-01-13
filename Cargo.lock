@@ -818,6 +818,7 @@ dependencies = [
  "indexed_vec",
  "indicatif",
  "itertools",
+ "log",
  "lp-modeler",
  "ndarray",
  "ordered-float",

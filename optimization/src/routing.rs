@@ -93,7 +93,19 @@ impl Optimizer for LpOptimizer {
             problem += lp_sum(&node_vars).le(&z);
         }
         let solver = CbcSolver::new();
-        let solution = solver.run(&problem).expect("failed to run the CBC solver");
+        let solution = solver.run(&problem).unwrap_or_else(|e| {
+            log::error!("Failed to run the CBC solver");
+            log::error!("Input: {}", e);
+            log::error!(
+                "{:?}",
+                weights
+                    .genrows()
+                    .into_iter()
+                    .map(|row| row.iter().copied().collect::<Vec<_>>())
+                    .collect::<Vec<_>>()
+            );
+            panic!();
+        });
         match solution.status {
             lp_modeler::solvers::Status::Optimal => {
                 result_to_array(weights.dim(), &solution.results)
