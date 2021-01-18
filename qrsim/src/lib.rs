@@ -28,7 +28,7 @@ mod broker;
 pub use broker::{Broker, BrokerQueues, Event as BrokerEvent, ResponseStatus};
 
 mod node;
-pub use node::{Event as NodeEvent, Node};
+pub use node::{Event as NodeEvent, Node, NodeQueueEntry};
 
 mod query_log;
 pub use query_log::{write_from_channel, QueryLog};

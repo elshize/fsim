@@ -27,13 +27,13 @@ use eyre::{eyre, WrapErr};
 use itertools::Itertools;
 use ndarray::Array2;
 use serde::{Deserialize, Serialize};
-use simrs::{ComponentId, QueueId, Simulation};
+use simrs::{ComponentId, Fifo, PriorityQueue, QueueId, Simulation};
 
 use optimization::{AssignmentResult, LpOptimizer, Optimizer};
 use qrsim::{
     run_events, write_from_channel, Broker, BrokerEvent, BrokerQueues, Dispatch, Node, NodeEvent,
-    NodeId, NodeRequest, NodeResponse, NumCores, ProbabilisticDispatcher, Query, QueryLog,
-    QueryRow, RequestId, ResponseStatus, RoundRobinDispatcher,
+    NodeId, NodeQueueEntry, NodeRequest, NodeResponse, NumCores, ProbabilisticDispatcher, Query,
+    QueryLog, QueryRow, RequestId, ResponseStatus, RoundRobinDispatcher,
 };
 
 type NodeComponentId = ComponentId<NodeEvent>;
@@ -52,6 +52,17 @@ enum DispatcherOption {
     /// Dispatchers with optimized probabilities computed at the beginning of the simulation.
     /// See [`ProbabilisticDispatcher`].
     Probabilistic,
+}
+
+/// Type of queue for incoming shard requests in nodes.
+#[derive(
+    Debug, PartialEq, Eq, Clone, Copy, strum::EnumString, strum::ToString, Serialize, Deserialize,
+)]
+#[strum(serialize_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+enum QueueType {
+    Fifo,
+    Priority,
 }
 
 /// Runs query routing simulation.
@@ -110,6 +121,10 @@ struct Opt {
     /// Do not log to the stderr.
     #[clap(long)]
     no_stderr: bool,
+
+    /// Type of queue for incoming shard requests in nodes.
+    #[clap(long, default_value = "fifo")]
+    queue_type: QueueType,
 }
 
 #[derive(Deserialize)]
@@ -448,7 +463,7 @@ impl SimulationConfig {
     fn nodes(
         &self,
         simulation: &mut Simulation,
-        incoming_queues: &[QueueId<(NodeRequest, ComponentId<BrokerEvent>)>],
+        incoming_queues: &[QueueId<NodeQueueEntry>],
         outcoming_queue: QueueId<NodeResponse>,
         queries: &Rc<Vec<Query>>,
     ) -> Vec<NodeComponentId> {
@@ -545,6 +560,7 @@ impl SimulationConfig {
         queries_output: File,
         nodes_output: File,
         matrix_output: Option<File>,
+        queue_type: QueueType,
     ) -> eyre::Result<()> {
         let mut sim = Simulation::default();
 
@@ -562,8 +578,13 @@ impl SimulationConfig {
         let queries = Rc::new(self.queries()?.queries);
         let query_events = read_query_events(&self.query_events_path)?;
 
-        let node_incoming_queues: Vec<_> = (0..self.num_nodes).map(|_| sim.add_queue()).collect();
-        let broker_response_queue = sim.add_queue::<NodeResponse>();
+        let node_incoming_queues: Vec<_> = (0..self.num_nodes)
+            .map(|_| match queue_type {
+                QueueType::Fifo => sim.add_queue(Fifo::default()),
+                QueueType::Priority => sim.add_queue(PriorityQueue::default()),
+            })
+            .collect();
+        let broker_response_queue = sim.add_queue(Fifo::default());
 
         let node_ids = self.nodes(
             &mut sim,
@@ -588,6 +609,7 @@ impl SimulationConfig {
             dispatcher: RefCell::new(dispatcher),
             query_log_id,
             responses: responses_key,
+            priority: priority(queue_type),
         });
 
         let num_queries = query_events.len();
@@ -600,6 +622,13 @@ impl SimulationConfig {
 
         run_events(&mut sim, num_queries, query_log_id);
         Ok(())
+    }
+}
+
+fn priority(queue_type: QueueType) -> Box<dyn Fn(&Query, &NodeRequest) -> u64> {
+    match queue_type {
+        QueueType::Fifo => Box::new(|_, r| r.dispatch_time().as_micros() as u64),
+        QueueType::Priority => Box::new(|_, r| r.dispatch_time().as_micros() as u64),
     }
 }
 
@@ -667,6 +696,7 @@ fn main() -> eyre::Result<()> {
     let query_output = File::create(&opt.query_output)?;
     let node_output = File::create(&opt.node_output)?;
     set_up_logger(&opt)?;
+    let queue_type = opt.queue_type;
     let conf = SimulationConfig::try_from(opt)?;
-    conf.run(query_output, node_output, matrix_output)
+    conf.run(query_output, node_output, matrix_output, queue_type)
 }
