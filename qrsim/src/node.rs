@@ -5,7 +5,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use simrs::{Component, ComponentId, Key, Queue, QueueId, Scheduler, State};
+use simrs::{Component, ComponentId, Fifo, Key, Queue, QueueId, Scheduler, State};
 
 /// Node events.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,7 +51,9 @@ impl<T> NodeQueue<T> {
     }
 }
 
-impl<T> Queue<T> for NodeQueue<T> {
+impl<T> Queue for NodeQueue<T> {
+    type Item = T;
+
     fn push(&mut self, value: T) -> Result<(), simrs::PushError> {
         if self.inner.len() < self.capacity {
             self.inner.push(value);
@@ -117,8 +119,8 @@ impl GetNodeRequest for NodeQueueEntry {
 pub struct Node {
     id: NodeId,
     queries: Rc<Vec<Query>>,
-    incoming: QueueId<NodeQueueEntry>,
-    outgoing: QueueId<NodeResponse>,
+    incoming: QueueId<NodeQueue<NodeQueueEntry>>,
+    outgoing: QueueId<Fifo<NodeResponse>>,
     idle_cores: Cell<usize>,
 }
 
@@ -128,8 +130,8 @@ impl Node {
     pub fn new(
         id: NodeId,
         queries: Rc<Vec<Query>>,
-        incoming: QueueId<NodeQueueEntry>,
-        outgoing: QueueId<NodeResponse>,
+        incoming: QueueId<NodeQueue<NodeQueueEntry>>,
+        outgoing: QueueId<Fifo<NodeResponse>>,
         num_cores: usize,
     ) -> Self {
         Self {

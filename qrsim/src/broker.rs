@@ -1,6 +1,6 @@
 use crate::{
-    node, BrokerRequest, Dispatch, NodeId, NodeQueueEntry, NodeRequest, NodeResponse, Query,
-    QueryLog, QueryRequest, QueryResponse, RequestId, ShardId,
+    node, BrokerRequest, Dispatch, NodeId, NodeQueue, NodeQueueEntry, NodeRequest, NodeResponse,
+    Query, QueryLog, QueryRequest, QueryResponse, RequestId, ShardId,
 };
 
 use std::cell::RefCell;
@@ -9,7 +9,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use simrs::{Component, ComponentId, Key, QueueId, Scheduler, State};
+use simrs::{Component, ComponentId, Fifo, Key, QueueId, Scheduler, State};
 
 /// Broker events.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,9 +61,9 @@ pub struct BrokerQueues {
     // /// The main entry queue where the queries originate.
     // pub entry: QueueId<QueryRequest>,
     /// Outgoing queues to shard nodes.
-    pub node: Vec<QueueId<NodeQueueEntry>>,
+    pub node: Vec<QueueId<NodeQueue<NodeQueueEntry>>>,
     /// Incoming queues from shard nodes.
-    pub response: QueueId<NodeResponse>,
+    pub response: QueueId<Fifo<NodeResponse>>,
 }
 
 /// Broker does two types of jobs:

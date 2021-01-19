@@ -478,8 +478,8 @@ impl SimulationConfig {
     fn nodes(
         &self,
         simulation: &mut Simulation,
-        incoming_queues: &[QueueId<NodeQueueEntry>],
-        outcoming_queue: QueueId<NodeResponse>,
+        incoming_queues: &[QueueId<NodeQueue<NodeQueueEntry>>],
+        outcoming_queue: QueueId<Fifo<NodeResponse>>,
         queries: &Rc<Vec<Query>>,
     ) -> Vec<NodeComponentId> {
         incoming_queues
