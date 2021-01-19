@@ -15,6 +15,7 @@ struct Weight {
     multiplier: f32,
 }
 
+#[allow(clippy::float_cmp)] // `multiplier` is always either 0.0 or 1.0
 impl Weight {
     fn enable(&mut self) -> bool {
         if self.multiplier == 1.0 {
@@ -79,7 +80,7 @@ fn calc_distributions(
 ) -> Result<Vec<WeightedAliasIndex<f32>>, rand_distr::WeightedError> {
     weights
         .iter()
-        .map(|weights| WeightedAliasIndex::new(weights.into_iter().map(Weight::value).collect()))
+        .map(|weights| WeightedAliasIndex::new(weights.iter().map(Weight::value).collect()))
         .collect()
 }
 
@@ -102,21 +103,30 @@ fn probabilities_to_weights(probabilities: ArrayView2<'_, f32>) -> Vec<Vec<Weigh
 
 impl ProbabilisticDispatcher {
     /// Constructs a new probabilistic dispatcher from the given dispatch matrix.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if probabilities are invalid and cannot be translated into a distribution.
     pub fn new(probabilities: ArrayView2<'_, f32>) -> Result<Self> {
         Self::with_rng(probabilities, ChaChaRng::from_entropy())
     }
 
     /// Constructs a new probabilistic dispatcher from the given dispatch matrix,
     /// and initializes the internal PRNG from the given seed.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if probabilities are invalid and cannot be translated into a distribution.
     pub fn with_seed(probabilities: ArrayView2<'_, f32>, seed: u64) -> Result<Self> {
         Self::with_rng(probabilities, ChaChaRng::seed_from_u64(seed))
     }
 
     /// Constructs a new probabilistic dispatcher from the given dispatch matrix,
     /// and initializes the internal PRNG from the given seed.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if probabilities are invalid and cannot be translated into a distribution.
     pub fn with_rng(probabilities: ArrayView2<'_, f32>, rng: ChaChaRng) -> Result<Self> {
         let num_nodes = probabilities.nrows();
         let num_shards = probabilities.ncols();
@@ -143,16 +153,28 @@ impl ProbabilisticDispatcher {
     /// Constructs a new dispatcher that optimizes probabilities based on the given weight matrix,
     /// and then repeats the optimization process each time there is a change indicated, such as
     /// disabling or enabling a node.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if probabilities are invalid and cannot be translated into a distribution.
     pub fn adaptive(weight_matrix: Array2<f32>) -> Result<Self> {
         Self::adaptive_with_rng(weight_matrix, ChaChaRng::from_entropy())
     }
 
     /// Constructs a new adaptive dispatcher with a random seed. See [`Self::adaptive`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if probabilities are invalid and cannot be translated into a distribution.
     pub fn adaptive_with_seed(weight_matrix: Array2<f32>, seed: u64) -> Result<Self> {
         Self::adaptive_with_rng(weight_matrix, ChaChaRng::seed_from_u64(seed))
     }
 
     /// Constructs a new adaptive dispatcher with a PRNG. See [`Self::adaptive`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if probabilities are invalid and cannot be translated into a distribution.
     pub fn adaptive_with_rng(weight_matrix: Array2<f32>, rng: ChaChaRng) -> Result<Self> {
         let probabilities = optimization::LpOptimizer.optimize(weight_matrix.view());
         let mut dispatcher = Self::with_rng(probabilities.view(), rng)?;
@@ -220,6 +242,7 @@ impl Dispatch for ProbabilisticDispatcher {
         self.num_shards
     }
 
+    #[allow(clippy::float_cmp)] // n is always either 0.0 or 1.0
     fn disable_node(&mut self, node_id: NodeId) -> Result<bool> {
         self.change_weight_status(node_id, Weight::disable, |n| n == 1.0)
             .wrap_err_with(|| {

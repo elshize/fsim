@@ -82,8 +82,8 @@ pub struct Broker {
     pub responses: Key<HashMap<RequestId, ResponseStatus>>,
     /// The key of the query log for status updates.
     pub query_log_id: Key<QueryLog>,
-    /// Function calculating the priority of a node request.
-    pub priority: Box<dyn Fn(&Query, &NodeRequest) -> u64>,
+    // /// Function calculating the priority of a node request.
+    // pub priority: Box<dyn Fn(&Query, &NodeRequest) -> u64>,
 }
 
 impl Component for Broker {
@@ -208,10 +208,6 @@ impl Broker {
         });
     }
 
-    fn priority(&self, request: &NodeRequest) -> u64 {
-        request.dispatch_time().as_micros() as u64
-    }
-
     fn process_dispatch(
         &self,
         self_id: ComponentId<Event>,
@@ -234,7 +230,7 @@ impl Broker {
         for (shard_id, node_id) in self.dispatcher.borrow().dispatch(&shards) {
             let queue = self.queues.node[usize::from(node_id)];
             let request = NodeRequest::new(Rc::clone(&request), shard_id, scheduler.time());
-            let entry = NodeQueueEntry::new(self.priority(&request), request.clone(), self_id);
+            let entry = NodeQueueEntry::new(request.clone(), self_id);
             if state.send(queue, entry).is_ok() {
                 scheduler.schedule(
                     dispatch_overhead,

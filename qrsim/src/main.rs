@@ -27,13 +27,14 @@ use eyre::{eyre, WrapErr};
 use itertools::Itertools;
 use ndarray::Array2;
 use serde::{Deserialize, Serialize};
-use simrs::{ComponentId, Fifo, PriorityQueue, QueueId, Simulation};
+use simrs::{ClockRef, ComponentId, Fifo, QueueId, Simulation};
 
-use optimization::{AssignmentResult, LpOptimizer, Optimizer};
+use optimization::AssignmentResult;
 use qrsim::{
-    run_events, write_from_channel, Broker, BrokerEvent, BrokerQueues, Dispatch, Node, NodeEvent,
-    NodeId, NodeQueueEntry, NodeRequest, NodeResponse, NumCores, ProbabilisticDispatcher, Query,
-    QueryLog, QueryRow, RequestId, ResponseStatus, RoundRobinDispatcher,
+    fifo_priority, run_events, time_priority, write_from_channel, BoxedPriority, Broker,
+    BrokerQueues, Dispatch, Node, NodeEvent, NodeId, NodeQueue, NodeQueueEntry, NodeResponse,
+    NumCores, ProbabilisticDispatcher, Query, QueryLog, QueryRow, RequestId, ResponseStatus,
+    RoundRobinDispatcher,
 };
 
 type NodeComponentId = ComponentId<NodeEvent>;
@@ -185,6 +186,10 @@ pub struct CacheMetadata {
 
 impl CacheMetadata {
     /// Creates a new cache metadata from the given input files, where the second one is optional.
+    ///
+    /// # Errors
+    ///
+    /// Returns error whenever the path is not a correct file, e.g., any path that ends with `..`.
     pub fn new<P1, P2>(query_input: P1, shard_scores_input: Option<P2>) -> eyre::Result<Self>
     where
         P1: Into<PathBuf>,
@@ -194,7 +199,7 @@ impl CacheMetadata {
         Ok(Self {
             file_path: Self::cached_file_path(&query_input)?,
             query_input,
-            shard_scores_input: shard_scores_input.map(|p| p.into()),
+            shard_scores_input: shard_scores_input.map(Into::into),
         })
     }
 
@@ -286,11 +291,11 @@ impl CachedQueries {
             log::info!("Query cache detected. Loading cache...");
             let cached: CachedQueries =
                 bincode::deserialize_from(cached_file).wrap_err("failed to parse cached file")?;
-            if cached.meta.shard_scores_input != meta.shard_scores_input {
-                Err(CacheLoadError::DifferentShardScoreInput)
-            } else {
+            if cached.meta.shard_scores_input == meta.shard_scores_input {
                 log::info!("Cache loaded.");
                 Ok(cached)
+            } else {
+                Err(CacheLoadError::DifferentShardScoreInput)
             }
         } else {
             Err(CacheLoadError::NewerQueryInput)
@@ -304,78 +309,89 @@ impl CachedQueries {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct ProbabilityMatrixOtuput {
-    weights: Vec<Vec<f32>>,
-    probabilities: Vec<Vec<f32>>,
-    loads: Vec<Vec<f32>>,
-}
+//#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+//struct ProbabilityMatrixOtuput {
+//    weights: Vec<Vec<f32>>,
+//    probabilities: Vec<Vec<f32>>,
+//    loads: Vec<Vec<f32>>,
+//}
 
-impl ProbabilityMatrixOtuput {
-    fn new(
-        weights: ndarray::ArrayView2<f32>,
-        probabilities: ndarray::ArrayView2<f32>,
-    ) -> eyre::Result<Self> {
-        Self::validate(weights, probabilities)?;
-        Ok(Self {
-            weights: array_to_vec(weights),
-            probabilities: array_to_vec(probabilities),
-            loads: array_to_vec((weights.to_owned() * &probabilities).view()),
-        })
+//impl ProbabilityMatrixOtuput {
+//    fn new(
+//        weights: ndarray::ArrayView2<f32>,
+//        probabilities: ndarray::ArrayView2<f32>,
+//    ) -> eyre::Result<Self> {
+//        Self::validate(weights, probabilities)?;
+//        Ok(Self {
+//            weights: array_to_vec(weights),
+//            probabilities: array_to_vec(probabilities),
+//            loads: array_to_vec((weights.to_owned() * probabilities).view()),
+//        })
+//    }
+
+//    /// Validates the probability matrix with respect to the weights.
+//    ///
+//    /// To pass validation, the following must hold:
+//    ///
+//    /// 1. Each column in the probability matrix must sum up to (approximately) 1. Because of the
+//    ///    finite precision of the floating point representation, this value must be within a
+//    ///    certain error from 1.0.
+//    /// 2. For any weight `w(i, j) = 0.0` (signifying that shard `j` is not assigned to machine `i`)
+//    ///    `p(i, j)` must also be equal 0.0.
+//    fn validate(
+//        weights: ndarray::ArrayView2<f32>,
+//        probabilities: ndarray::ArrayView2<f32>,
+//    ) -> eyre::Result<()> {
+//        for (column, (probabilities, weights)) in probabilities
+//            .gencolumns()
+//            .into_iter()
+//            .zip(weights.gencolumns())
+//            .enumerate()
+//        {
+//            let sum = probabilities.iter().zip(weights).enumerate().try_fold(
+//                0.0,
+//                |sum, (row, (p, w))| {
+//                    if *w == 0.0 && *p > 0.0 {
+//                        Err(eyre!(
+//                            "weight at ({},{}) is 0 but probability is {}",
+//                            row,
+//                            column,
+//                            p
+//                        ))
+//                    } else {
+//                        Ok(sum + p)
+//                    }
+//                },
+//            )?;
+//            if (sum - 1.0).abs() > 0.0001 {
+//                eyre::bail!(
+//                    "probabilities for shard {} do not sum to 1 ({})",
+//                    column,
+//                    sum
+//                );
+//            }
+//        }
+//        Ok(())
+//    }
+//}
+
+// fn array_to_vec(array: ndarray::ArrayView2<f32>) -> Vec<Vec<f32>> {
+//     array
+//         .genrows()
+//         .into_iter()
+//         .map(|row| row.into_iter().copied().collect())
+//         .collect()
+// }
+
+fn priority(
+    queue_type: QueueType,
+    clock: ClockRef,
+    queries: Rc<Vec<Query>>,
+) -> BoxedPriority<NodeQueueEntry> {
+    match queue_type {
+        QueueType::Fifo => fifo_priority(clock),
+        QueueType::Priority => time_priority(queries),
     }
-
-    /// Validates the probability matrix with respect to the weights.
-    ///
-    /// To pass validation, the following must hold:
-    ///
-    /// 1. Each column in the probability matrix must sum up to (approximately) 1. Because of the
-    ///    finite precision of the floating point representation, this value must be within a
-    ///    certain error from 1.0.
-    /// 2. For any weight `w(i, j) = 0.0` (signifying that shard `j` is not assigned to machine `i`)
-    ///    `p(i, j)` must also be equal 0.0.
-    fn validate(
-        weights: ndarray::ArrayView2<f32>,
-        probabilities: ndarray::ArrayView2<f32>,
-    ) -> eyre::Result<()> {
-        for (column, (probabilities, weights)) in probabilities
-            .gencolumns()
-            .into_iter()
-            .zip(weights.gencolumns())
-            .enumerate()
-        {
-            let sum = probabilities.iter().zip(weights).enumerate().try_fold(
-                0.0,
-                |sum, (row, (p, w))| {
-                    if *w == 0.0 && *p > 0.0 {
-                        Err(eyre!(
-                            "weight at ({},{}) is 0 but probability is {}",
-                            row,
-                            column,
-                            p
-                        ))
-                    } else {
-                        Ok(sum + p)
-                    }
-                },
-            )?;
-            if (sum - 1.0).abs() > 0.0001 {
-                eyre::bail!(
-                    "probabilities for shard {} do not sum to 1 ({})",
-                    column,
-                    sum
-                );
-            }
-        }
-        Ok(())
-    }
-}
-
-fn array_to_vec(array: ndarray::ArrayView2<f32>) -> Vec<Vec<f32>> {
-    array
-        .genrows()
-        .into_iter()
-        .map(|row| row.into_iter().copied().collect())
-        .collect()
 }
 
 impl SimulationConfig {
@@ -412,13 +428,11 @@ impl SimulationConfig {
         rows.sort_by(|lhs, rhs| {
             (&lhs.query_id, &lhs.shard_id).cmp(&(&rhs.query_id, &rhs.shard_id))
         });
-        let mut shard_scores_iter = Self::load_shard_scores(&meta)?.map(|v| v.into_iter());
+        let mut shard_scores_iter = Self::load_shard_scores(&meta)?.map(IntoIterator::into_iter);
         let shard_scores = std::iter::from_fn(|| {
-            if let Some(iter) = &mut shard_scores_iter {
-                Some(iter.next())
-            } else {
-                Some(None)
-            }
+            shard_scores_iter
+                .as_mut()
+                .map_or(Some(None), |iter| Some(iter.next()))
         });
         log::info!("Queries sorted. Now processing...");
         let queries = CachedQueries {
@@ -449,9 +463,10 @@ impl SimulationConfig {
     /// See [`CachedQueries`] for more information.
     fn queries(&self) -> eyre::Result<CachedQueries> {
         let meta = CacheMetadata::new(&self.queries_path, self.shard_scores_path.as_ref())?;
-        CachedQueries::load(&meta).or_else(|err| match err {
-            CacheLoadError::Io(err) => Err(err),
-            _ => {
+        CachedQueries::load(&meta).or_else(|err| {
+            if let CacheLoadError::Io(err) = err {
+                Err(err)
+            } else {
                 log::warn!("{}", err);
                 Self::process_input_queries(meta)
             }
@@ -482,10 +497,7 @@ impl SimulationConfig {
             .collect()
     }
 
-    fn optimized_probabilistic_dispatcher(
-        &self,
-        _matrix_output: Option<File>,
-    ) -> eyre::Result<Box<dyn Dispatch>> {
+    fn optimized_probabilistic_dispatcher(&self) -> eyre::Result<Box<dyn Dispatch>> {
         let weights = Array2::from_shape_vec(
             (self.num_nodes, self.num_shards),
             self.assignment
@@ -516,6 +528,7 @@ impl SimulationConfig {
         Ok(Box::new(ProbabilisticDispatcher::adaptive(weights)?))
     }
 
+    #[allow(clippy::cast_precision_loss)]
     fn uniform_probabilistic_dispatcher(&self) -> eyre::Result<Box<dyn Dispatch>> {
         let probabilities = Array2::from_shape_vec(
             (self.num_nodes, self.num_shards),
@@ -542,14 +555,12 @@ impl SimulationConfig {
     ///
     /// This function might return an error because if `matrix_output.is_some()`, then the result
     /// of probability optimization will be stored in this file, and thus an I/O could occur.
-    fn dispatcher(&self, matrix_output: Option<File>) -> eyre::Result<Box<dyn Dispatch>> {
+    fn dispatcher(&self) -> eyre::Result<Box<dyn Dispatch>> {
         match self.dispatcher {
             DispatcherOption::RoundRobin => {
                 Ok(Box::new(RoundRobinDispatcher::new(&self.assignment.nodes)))
             }
-            DispatcherOption::Probabilistic => {
-                self.optimized_probabilistic_dispatcher(matrix_output)
-            }
+            DispatcherOption::Probabilistic => self.optimized_probabilistic_dispatcher(),
             DispatcherOption::Uniform => self.uniform_probabilistic_dispatcher(),
         }
     }
@@ -559,7 +570,6 @@ impl SimulationConfig {
         &self,
         queries_output: File,
         nodes_output: File,
-        matrix_output: Option<File>,
         queue_type: QueueType,
     ) -> eyre::Result<()> {
         let mut sim = Simulation::default();
@@ -579,9 +589,12 @@ impl SimulationConfig {
         let query_events = read_query_events(&self.query_events_path)?;
 
         let node_incoming_queues: Vec<_> = (0..self.num_nodes)
-            .map(|_| match queue_type {
-                QueueType::Fifo => sim.add_queue(Fifo::default()),
-                QueueType::Priority => sim.add_queue(PriorityQueue::default()),
+            .map(|_| {
+                sim.add_queue(NodeQueue::unbounded(priority(
+                    queue_type,
+                    sim.scheduler.clock(),
+                    Rc::clone(&queries),
+                )))
             })
             .collect();
         let broker_response_queue = sim.add_queue(Fifo::default());
@@ -595,7 +608,7 @@ impl SimulationConfig {
         let responses_key = sim
             .state
             .insert(HashMap::<RequestId, ResponseStatus>::new());
-        let mut dispatcher = self.dispatcher(matrix_output)?;
+        let mut dispatcher = self.dispatcher()?;
         for &node_id in &self.disabled_nodes {
             dispatcher.disable_node(node_id)?;
         }
@@ -609,7 +622,7 @@ impl SimulationConfig {
             dispatcher: RefCell::new(dispatcher),
             query_log_id,
             responses: responses_key,
-            priority: priority(queue_type),
+            //priority: priority(queue_type),
         });
 
         let num_queries = query_events.len();
@@ -625,12 +638,13 @@ impl SimulationConfig {
     }
 }
 
-fn priority(queue_type: QueueType) -> Box<dyn Fn(&Query, &NodeRequest) -> u64> {
-    match queue_type {
-        QueueType::Fifo => Box::new(|_, r| r.dispatch_time().as_micros() as u64),
-        QueueType::Priority => Box::new(|_, r| r.dispatch_time().as_micros() as u64),
-    }
-}
+// #[allow(clippy::clippy::cast_possible_truncation)]
+// fn priority(queue_type: QueueType) -> Box<dyn Fn(&Query, &NodeRequest) -> u64> {
+//     match queue_type {
+//         QueueType::Fifo => Box::new(|_, r| r.dispatch_time().as_micros() as u64),
+//         QueueType::Priority => Box::new(|_, r| r.dispatch_time().as_micros() as u64),
+//     }
+// }
 
 /// Reads the list of initial events passed as an input file.
 ///
@@ -688,15 +702,15 @@ fn main() -> eyre::Result<()> {
     if opt.prob_matrix_output.is_some() && opt.dispatcher != DispatcherOption::Probabilistic {
         eyre::bail!("matrix output given but dispatcher is not probabilistic");
     }
-    let matrix_output = opt
-        .prob_matrix_output
-        .as_ref()
-        .map(|p| File::create(p))
-        .transpose()?;
+    // let matrix_output = opt
+    //     .prob_matrix_output
+    //     .as_ref()
+    //     .map(File::create)
+    //     .transpose()?;
     let query_output = File::create(&opt.query_output)?;
     let node_output = File::create(&opt.node_output)?;
     set_up_logger(&opt)?;
     let queue_type = opt.queue_type;
     let conf = SimulationConfig::try_from(opt)?;
-    conf.run(query_output, node_output, matrix_output, queue_type)
+    conf.run(query_output, node_output, queue_type)
 }

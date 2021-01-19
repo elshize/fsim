@@ -28,7 +28,7 @@ mod broker;
 pub use broker::{Broker, BrokerQueues, Event as BrokerEvent, ResponseStatus};
 
 mod node;
-pub use node::{Event as NodeEvent, Node, NodeQueueEntry};
+pub use node::{BoxedPriority, Event as NodeEvent, Node, NodeQueue, NodeQueueEntry};
 
 mod query_log;
 pub use query_log::{write_from_channel, QueryLog};
@@ -696,6 +696,23 @@ pub fn run_until(simulation: &mut Simulation, time: Duration, key: Key<QueryLog>
     time
 }
 
+#[allow(clippy::cast_possible_truncation)]
+fn micros(duration: Duration) -> i64 {
+    duration.as_micros() as i64
+}
+
+pub fn fifo_priority<T: node::GetNodeRequest>(clock: simrs::ClockRef) -> BoxedPriority<T> {
+    Box::new(move |entry: &T| micros(entry.node_request().dispatch_time()) - micros(clock.time()))
+}
+
+pub fn time_priority<T: node::GetNodeRequest>(queries: Rc<Vec<Query>>) -> BoxedPriority<T> {
+    Box::new(move |entry: &T| {
+        let request = entry.node_request();
+        let query: &Query = &queries[usize::from(request.query_id())];
+        -(query.retrieval_times[usize::from(request.shard_id())] as i64)
+    })
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -730,5 +747,53 @@ mod test {
             rmp_serde::from_read_ref::<_, TimedEvent>(&rmp_serde::to_vec(&event).unwrap()).unwrap(),
             event
         );
+    }
+
+    struct NodeQueueEntryStub {
+        node_request: NodeRequest,
+    }
+
+    impl node::GetNodeRequest for NodeQueueEntryStub {
+        fn node_request(&self) -> &NodeRequest {
+            &self.node_request
+        }
+    }
+
+    fn make_entry(query_id: QueryId, shard_id: ShardId) -> NodeQueueEntryStub {
+        let broker_request = Rc::new(BrokerRequest::new(
+            QueryRequest::new(RequestId::from(0), query_id, Duration::from_micros(0)),
+            Duration::from_micros(1),
+        ));
+        NodeQueueEntryStub {
+            node_request: NodeRequest::new(broker_request, shard_id, Duration::from_micros(2)),
+        }
+    }
+
+    #[test]
+    fn priority() {
+        let f = fifo_priority(Rc::new(std::cell::Cell::new(Duration::from_micros(7))).into());
+        assert_eq!(f(&make_entry(QueryId::from(0), ShardId::from(0))), -5);
+
+        let queries = Rc::new(vec![
+            Query {
+                selection_time: 0,
+                selected_shards: None,
+                retrieval_times: vec![10, 20, 30],
+                shard_scores: None,
+            },
+            Query {
+                selection_time: 0,
+                selected_shards: None,
+                retrieval_times: vec![11, 22, 33],
+                shard_scores: None,
+            },
+        ]);
+        let f = time_priority::<NodeQueueEntryStub>(queries);
+        assert_eq!(f(&make_entry(QueryId::from(0), ShardId::from(0))), -10);
+        assert_eq!(f(&make_entry(QueryId::from(0), ShardId::from(1))), -20);
+        assert_eq!(f(&make_entry(QueryId::from(0), ShardId::from(2))), -30);
+        assert_eq!(f(&make_entry(QueryId::from(1), ShardId::from(0))), -11);
+        assert_eq!(f(&make_entry(QueryId::from(1), ShardId::from(1))), -22);
+        assert_eq!(f(&make_entry(QueryId::from(1), ShardId::from(2))), -33);
     }
 }

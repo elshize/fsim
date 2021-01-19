@@ -14,6 +14,10 @@ pub trait Dispatch {
     fn num_nodes(&self) -> usize;
     /// Disablese `node_id` and stops routing there. Returns the `true` if the node was not
     /// disabled before.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if disabling the given node leads to an invalid state.
     fn disable_node(&mut self, node_id: NodeId) -> eyre::Result<bool>;
     /// Enables `node_id` if it was previously disabled. Returns `true` if the node was disabled.
     fn enable_node(&mut self, node_id: NodeId) -> bool;

@@ -26,34 +26,27 @@ pub enum Event {
     },
 }
 
-/// Entry in the node queue containing a priority value, which is used to decide the order of
-/// popping values from the queue.
-#[derive(Debug)]
-pub struct NodeQueueEntry {
-    priority: u64,
-    request: NodeRequest,
-    broker: ComponentId<BrokerEvent>,
-}
+pub type BoxedPriority<T> = Box<dyn Fn(&T) -> i64>;
 
 pub struct NodeQueue<T> {
     inner: Vec<T>,
     capacity: usize,
-    priority_fn: Box<dyn Fn(&T) -> i64>,
+    priority_fn: BoxedPriority<T>,
 }
 
 impl<T> NodeQueue<T> {
-    pub fn unbounded<F: Fn(&T) -> i64 + 'static>(priority_fn: F) -> Self {
+    pub fn unbounded(priority_fn: BoxedPriority<T>) -> Self {
         Self {
             inner: Vec::new(),
             capacity: usize::MAX,
-            priority_fn: Box::new(priority_fn),
+            priority_fn,
         }
     }
-    pub fn bounded<F: Fn(&T) -> i64 + 'static>(priority_fn: F, capacity: usize) -> Self {
+    pub fn bounded(priority_fn: BoxedPriority<T>, capacity: usize) -> Self {
         Self {
             inner: Vec::with_capacity(capacity),
             capacity,
-            priority_fn: Box::new(priority_fn),
+            priority_fn,
         }
     }
 }
@@ -86,34 +79,33 @@ impl<T> Queue<T> for NodeQueue<T> {
     }
 }
 
+/// Trait implemented by structs that contain a node request.
+pub trait GetNodeRequest {
+    /// Returns a reference to the contained node request.
+    fn node_request(&self) -> &NodeRequest;
+}
+
+/// Entry in the node queue containing a priority value, which is used to decide the order of
+/// popping values from the queue.
+#[derive(Debug)]
+pub struct NodeQueueEntry {
+    /// Request being sent to the node.
+    pub request: NodeRequest,
+    /// Broker from which the request is being sent.
+    pub broker: ComponentId<BrokerEvent>,
+}
+
 impl NodeQueueEntry {
     /// Constructs a new [`NodeQueueEntry`].
-    pub fn new(priority: u64, request: NodeRequest, broker: ComponentId<BrokerEvent>) -> Self {
-        Self {
-            priority,
-            request,
-            broker,
-        }
+    #[must_use]
+    pub fn new(request: NodeRequest, broker: ComponentId<BrokerEvent>) -> Self {
+        Self { request, broker }
     }
 }
 
-impl PartialEq for NodeQueueEntry {
-    fn eq(&self, other: &Self) -> bool {
-        self.priority == other.priority
-    }
-}
-
-impl Eq for NodeQueueEntry {}
-
-impl PartialOrd for NodeQueueEntry {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.priority.partial_cmp(&other.priority)
-    }
-}
-
-impl Ord for NodeQueueEntry {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.priority.cmp(&other.priority)
+impl GetNodeRequest for NodeQueueEntry {
+    fn node_request(&self) -> &NodeRequest {
+        &self.request
     }
 }
 
