@@ -701,11 +701,20 @@ fn micros(duration: Duration) -> i64 {
     duration.as_micros() as i64
 }
 
-pub fn fifo_priority<T: node::GetNodeRequest>(clock: simrs::ClockRef) -> BoxedPriority<T> {
-    Box::new(move |entry: &T| micros(entry.node_request().dispatch_time()) - micros(clock.time()))
+/// Priority of a node request that always prefers the requests dispatched earlier.
+///
+/// Note that this is a FIFO in with respect to the time of the dispatch, not the order in which
+/// the elements are pushed. Consequently, if two requests have the same dispatch time, the order
+/// in which they will be processed is undefined.
+#[must_use]
+pub fn fifo_priority<T: node::GetNodeRequest>() -> BoxedPriority<T> {
+    Box::new(move |entry: &T| -micros(entry.node_request().dispatch_time()))
 }
 
-pub fn time_priority<T: node::GetNodeRequest>(queries: Rc<Vec<Query>>) -> BoxedPriority<T> {
+/// Priority of a node request that always prefers the requests estimated to be shorter.
+#[allow(clippy::cast_possible_truncation)]
+#[must_use]
+pub fn cost_priority<T: node::GetNodeRequest>(queries: Rc<Vec<Query>>) -> BoxedPriority<T> {
     Box::new(move |entry: &T| {
         let request = entry.node_request();
         let query: &Query = &queries[usize::from(request.query_id())];
@@ -749,7 +758,7 @@ mod test {
         );
     }
 
-    struct NodeQueueEntryStub {
+    pub struct NodeQueueEntryStub {
         node_request: NodeRequest,
     }
 
@@ -759,20 +768,21 @@ mod test {
         }
     }
 
-    fn make_entry(query_id: QueryId, shard_id: ShardId) -> NodeQueueEntryStub {
+    pub fn make_entry(query_id: QueryId, shard_id: ShardId, time: Duration) -> NodeQueueEntryStub {
         let broker_request = Rc::new(BrokerRequest::new(
             QueryRequest::new(RequestId::from(0), query_id, Duration::from_micros(0)),
             Duration::from_micros(1),
         ));
         NodeQueueEntryStub {
-            node_request: NodeRequest::new(broker_request, shard_id, Duration::from_micros(2)),
+            node_request: NodeRequest::new(broker_request, shard_id, time),
         }
     }
 
     #[test]
     fn priority() {
-        let f = fifo_priority(Rc::new(std::cell::Cell::new(Duration::from_micros(7))).into());
-        assert_eq!(f(&make_entry(QueryId::from(0), ShardId::from(0))), -5);
+        let f = fifo_priority();
+        let time = Duration::from_micros(2);
+        assert_eq!(f(&make_entry(QueryId::from(0), ShardId::from(0), time)), -2);
 
         let queries = Rc::new(vec![
             Query {
@@ -788,12 +798,30 @@ mod test {
                 shard_scores: None,
             },
         ]);
-        let f = time_priority::<NodeQueueEntryStub>(queries);
-        assert_eq!(f(&make_entry(QueryId::from(0), ShardId::from(0))), -10);
-        assert_eq!(f(&make_entry(QueryId::from(0), ShardId::from(1))), -20);
-        assert_eq!(f(&make_entry(QueryId::from(0), ShardId::from(2))), -30);
-        assert_eq!(f(&make_entry(QueryId::from(1), ShardId::from(0))), -11);
-        assert_eq!(f(&make_entry(QueryId::from(1), ShardId::from(1))), -22);
-        assert_eq!(f(&make_entry(QueryId::from(1), ShardId::from(2))), -33);
+        let f = cost_priority::<NodeQueueEntryStub>(queries);
+        assert_eq!(
+            f(&make_entry(QueryId::from(0), ShardId::from(0), time)),
+            -10
+        );
+        assert_eq!(
+            f(&make_entry(QueryId::from(0), ShardId::from(1), time)),
+            -20
+        );
+        assert_eq!(
+            f(&make_entry(QueryId::from(0), ShardId::from(2), time)),
+            -30
+        );
+        assert_eq!(
+            f(&make_entry(QueryId::from(1), ShardId::from(0), time)),
+            -11
+        );
+        assert_eq!(
+            f(&make_entry(QueryId::from(1), ShardId::from(1), time)),
+            -22
+        );
+        assert_eq!(
+            f(&make_entry(QueryId::from(1), ShardId::from(2), time)),
+            -33
+        );
     }
 }

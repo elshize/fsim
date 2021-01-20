@@ -27,11 +27,11 @@ use eyre::{eyre, WrapErr};
 use itertools::Itertools;
 use ndarray::Array2;
 use serde::{Deserialize, Serialize};
-use simrs::{ClockRef, ComponentId, Fifo, QueueId, Simulation};
+use simrs::{ComponentId, Fifo, QueueId, Simulation};
 
 use optimization::AssignmentResult;
 use qrsim::{
-    fifo_priority, run_events, time_priority, write_from_channel, BoxedPriority, Broker,
+    cost_priority, fifo_priority, run_events, write_from_channel, BoxedPriority, Broker,
     BrokerQueues, Dispatch, Node, NodeEvent, NodeId, NodeQueue, NodeQueueEntry, NodeResponse,
     NumCores, ProbabilisticDispatcher, Query, QueryLog, QueryRow, RequestId, ResponseStatus,
     RoundRobinDispatcher,
@@ -383,14 +383,10 @@ impl CachedQueries {
 //         .collect()
 // }
 
-fn priority(
-    queue_type: QueueType,
-    clock: ClockRef,
-    queries: Rc<Vec<Query>>,
-) -> BoxedPriority<NodeQueueEntry> {
+fn priority(queue_type: QueueType, queries: Rc<Vec<Query>>) -> BoxedPriority<NodeQueueEntry> {
     match queue_type {
-        QueueType::Fifo => fifo_priority(clock),
-        QueueType::Priority => time_priority(queries),
+        QueueType::Fifo => fifo_priority(),
+        QueueType::Priority => cost_priority(queries),
     }
 }
 
@@ -592,7 +588,6 @@ impl SimulationConfig {
             .map(|_| {
                 sim.add_queue(NodeQueue::unbounded(priority(
                     queue_type,
-                    sim.scheduler.clock(),
                     Rc::clone(&queries),
                 )))
             })
