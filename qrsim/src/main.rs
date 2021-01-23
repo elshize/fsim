@@ -31,10 +31,10 @@ use simrs::{ComponentId, Fifo, QueueId, Simulation};
 
 use optimization::AssignmentResult;
 use qrsim::{
-    cost_priority, fifo_priority, run_events, write_from_channel, BoxedPriority, Broker,
-    BrokerQueues, Dispatch, Node, NodeEvent, NodeId, NodeQueue, NodeQueueEntry, NodeResponse,
-    NumCores, ProbabilisticDispatcher, Query, QueryLog, QueryRow, RequestId, ResponseStatus,
-    RoundRobinDispatcher,
+    cost_select, fifo_select, run_events, weighted_cost_select, write_from_channel, BoxedSelect,
+    Broker, BrokerQueues, Dispatch, Node, NodeEvent, NodeId, NodeQueue, NodeQueueEntry,
+    NodeResponse, NumCores, ProbabilisticDispatcher, Query, QueryLog, QueryRow, RequestId,
+    ResponseStatus, RoundRobinDispatcher,
 };
 
 type NodeComponentId = ComponentId<NodeEvent>;
@@ -64,6 +64,7 @@ enum DispatcherOption {
 enum QueueType {
     Fifo,
     Priority,
+    Weighted,
 }
 
 /// Runs query routing simulation.
@@ -383,10 +384,11 @@ impl CachedQueries {
 //         .collect()
 // }
 
-fn priority(queue_type: QueueType, queries: Rc<Vec<Query>>) -> BoxedPriority<NodeQueueEntry> {
+fn select_function(queue_type: QueueType, queries: Rc<Vec<Query>>) -> BoxedSelect<NodeQueueEntry> {
     match queue_type {
-        QueueType::Fifo => fifo_priority(),
-        QueueType::Priority => cost_priority(queries),
+        QueueType::Fifo => fifo_select(),
+        QueueType::Priority => cost_select(queries),
+        QueueType::Weighted => weighted_cost_select(queries),
     }
 }
 
@@ -586,7 +588,7 @@ impl SimulationConfig {
 
         let node_incoming_queues: Vec<_> = (0..self.num_nodes)
             .map(|_| {
-                sim.add_queue(NodeQueue::unbounded(priority(
+                sim.add_queue(NodeQueue::unbounded(select_function(
                     queue_type,
                     Rc::clone(&queries),
                 )))

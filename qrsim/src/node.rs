@@ -26,29 +26,31 @@ pub enum Event {
     },
 }
 
-pub type BoxedPriority<T> = Box<dyn Fn(&T) -> i64>;
+/// Function returning the index of the next element (according to some strategy).
+pub type BoxedSelect<T> = Box<dyn FnMut(&[T]) -> Option<usize>>;
 
 pub struct NodeQueue<T> {
     inner: Vec<T>,
     capacity: usize,
-    priority_fn: BoxedPriority<T>,
+    select: BoxedSelect<T>,
 }
 
 impl<T> NodeQueue<T> {
     #[must_use]
-    pub fn unbounded(priority_fn: BoxedPriority<T>) -> Self {
+    pub fn unbounded(select: BoxedSelect<T>) -> Self {
         Self {
             inner: Vec::new(),
             capacity: usize::MAX,
-            priority_fn,
+            select,
         }
     }
+
     #[must_use]
-    pub fn bounded(priority_fn: BoxedPriority<T>, capacity: usize) -> Self {
+    pub fn bounded(select: BoxedSelect<T>, capacity: usize) -> Self {
         Self {
             inner: Vec::with_capacity(capacity),
             capacity,
-            priority_fn,
+            select,
         }
     }
 }
@@ -66,16 +68,7 @@ impl<T> Queue for NodeQueue<T> {
     }
 
     fn pop(&mut self) -> Option<T> {
-        if let Some((idx, _)) = self
-            .inner
-            .iter()
-            .enumerate()
-            .max_by_key(|(_, val)| (self.priority_fn)(val))
-        {
-            Some(self.inner.swap_remove(idx))
-        } else {
-            None
-        }
+        (self.select)(&mut self.inner).map(|idx| self.inner.swap_remove(idx))
     }
 
     fn len(&self) -> usize {
@@ -216,7 +209,7 @@ impl Component for Node {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{fifo_priority, test::make_entry, test::NodeQueueEntryStub, QueryId, ShardId};
+    use crate::{fifo_select, test::make_entry, test::NodeQueueEntryStub, QueryId, ShardId};
     use quickcheck::{Arbitrary, Gen};
     use quickcheck_macros::quickcheck;
 
@@ -239,38 +232,9 @@ mod test {
     }
 
     #[quickcheck]
-    fn test_node_queue(ops: Vec<QueueOperation>) -> eyre::Result<()> {
-        let time = Rc::new(Cell::new(0_i64));
-        let mut queue = {
-            let time = Rc::clone(&time);
-            NodeQueue::unbounded(Box::new(move |x: &i64| time.get() - *x))
-        };
-        let mut counter = 0_i64;
-        let mut buffer = vec![];
-        for op in ops {
-            match op {
-                QueueOperation::Push => {
-                    queue.push(counter)?;
-                    counter += 1;
-                }
-                QueueOperation::Pop => {
-                    if let Some(v) = queue.pop() {
-                        buffer.push(v);
-                    }
-                }
-                QueueOperation::TimeIncrement => {
-                    time.replace(time.get() + 1);
-                }
-            }
-        }
-        assert_eq!(buffer, (0..buffer.len() as i64).collect::<Vec<_>>());
-        Ok(())
-    }
-
-    #[quickcheck]
     fn test_node_queue_with_requests(ops: Vec<QueueOperation>) -> eyre::Result<()> {
         let mut clock = Duration::default();
-        let mut queue = NodeQueue::<NodeQueueEntryStub>::unbounded(fifo_priority());
+        let mut queue = NodeQueue::<NodeQueueEntryStub>::unbounded(fifo_select());
         let mut buffer = vec![];
         for op in ops {
             match op {

@@ -28,7 +28,7 @@ mod broker;
 pub use broker::{Broker, BrokerQueues, Event as BrokerEvent, ResponseStatus};
 
 mod node;
-pub use node::{BoxedPriority, Event as NodeEvent, Node, NodeQueue, NodeQueueEntry};
+pub use node::{BoxedSelect, Event as NodeEvent, Node, NodeQueue, NodeQueueEntry};
 
 mod query_log;
 pub use query_log::{write_from_channel, QueryLog};
@@ -701,24 +701,60 @@ fn micros(duration: Duration) -> i64 {
     duration.as_micros() as i64
 }
 
+fn select_by_priority<T, F: Fn(&T) -> i64>(elements: &[T], priority: F) -> Option<usize> {
+    elements
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, val)| priority(val))
+        .map(|(idx, _)| idx)
+}
+
 /// Priority of a node request that always prefers the requests dispatched earlier.
 ///
 /// Note that this is a FIFO in with respect to the time of the dispatch, not the order in which
 /// the elements are pushed. Consequently, if two requests have the same dispatch time, the order
 /// in which they will be processed is undefined.
 #[must_use]
-pub fn fifo_priority<T: node::GetNodeRequest>() -> BoxedPriority<T> {
-    Box::new(move |entry: &T| -micros(entry.node_request().dispatch_time()))
+pub fn fifo_select<T: node::GetNodeRequest>() -> BoxedSelect<T> {
+    Box::new(|elements: &[T]| {
+        select_by_priority(elements, |entry: &T| {
+            -micros(entry.node_request().dispatch_time())
+        })
+    })
 }
 
 /// Priority of a node request that always prefers the requests estimated to be shorter.
 #[allow(clippy::cast_possible_truncation)]
 #[must_use]
-pub fn cost_priority<T: node::GetNodeRequest>(queries: Rc<Vec<Query>>) -> BoxedPriority<T> {
-    Box::new(move |entry: &T| {
-        let request = entry.node_request();
-        let query: &Query = &queries[usize::from(request.query_id())];
-        -(query.retrieval_times[usize::from(request.shard_id())] as i64)
+pub fn cost_select<T: node::GetNodeRequest>(queries: Rc<Vec<Query>>) -> BoxedSelect<T> {
+    Box::new(move |elements: &[T]| {
+        select_by_priority(elements, |entry: &T| {
+            let request = entry.node_request();
+            let query: &Query = &queries[usize::from(request.query_id())];
+            -(query.retrieval_times[usize::from(request.shard_id())] as i64)
+        })
+    })
+}
+
+/// Priority of a node request that always prefers the requests estimated to be shorter.
+#[must_use]
+pub fn weighted_cost_select<T: node::GetNodeRequest>(queries: Rc<Vec<Query>>) -> BoxedSelect<T> {
+    use rand_chacha::rand_core::SeedableRng;
+    use rand_distr::Distribution;
+    let mut rng = rand_chacha::ChaChaRng::from_entropy();
+    Box::new(move |elements: &[T]| {
+        let weights = elements
+            .iter()
+            .map(|e| {
+                let query_id = e.node_request().query_id();
+                let shard_id = e.node_request().shard_id();
+                let query: &Query = &queries[usize::from(query_id)];
+                1_f64 / query.retrieval_times[usize::from(shard_id)] as f64
+            })
+            .collect();
+        rand_distr::WeightedAliasIndex::new(weights)
+            .ok()
+            .map(|distr| distr.sample(&mut rng))
     })
 }
 
@@ -776,52 +812,5 @@ mod test {
         NodeQueueEntryStub {
             node_request: NodeRequest::new(broker_request, shard_id, time),
         }
-    }
-
-    #[test]
-    fn priority() {
-        let f = fifo_priority();
-        let time = Duration::from_micros(2);
-        assert_eq!(f(&make_entry(QueryId::from(0), ShardId::from(0), time)), -2);
-
-        let queries = Rc::new(vec![
-            Query {
-                selection_time: 0,
-                selected_shards: None,
-                retrieval_times: vec![10, 20, 30],
-                shard_scores: None,
-            },
-            Query {
-                selection_time: 0,
-                selected_shards: None,
-                retrieval_times: vec![11, 22, 33],
-                shard_scores: None,
-            },
-        ]);
-        let f = cost_priority::<NodeQueueEntryStub>(queries);
-        assert_eq!(
-            f(&make_entry(QueryId::from(0), ShardId::from(0), time)),
-            -10
-        );
-        assert_eq!(
-            f(&make_entry(QueryId::from(0), ShardId::from(1), time)),
-            -20
-        );
-        assert_eq!(
-            f(&make_entry(QueryId::from(0), ShardId::from(2), time)),
-            -30
-        );
-        assert_eq!(
-            f(&make_entry(QueryId::from(1), ShardId::from(0), time)),
-            -11
-        );
-        assert_eq!(
-            f(&make_entry(QueryId::from(1), ShardId::from(1), time)),
-            -22
-        );
-        assert_eq!(
-            f(&make_entry(QueryId::from(1), ShardId::from(2), time)),
-            -33
-        );
     }
 }
