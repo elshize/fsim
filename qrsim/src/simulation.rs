@@ -92,6 +92,9 @@ pub struct SimulationConfig {
     /// Dispatcher policy.
     pub dispatcher: DispatcherOption,
 
+    /// Queue type. See [`QueueType`].
+    pub queue_type: QueueType,
+
     /// List of nodes that are disabled during this simulation.
     pub disabled_nodes: Vec<NodeId>,
 }
@@ -409,20 +412,19 @@ impl SimulationConfig {
     ///
     /// May return an error if it fails to read files or the read configuration turns out to be
     /// invalid.
-    pub fn run(
-        &self,
-        queries_output: File,
-        nodes_output: File,
-        queue_type: QueueType,
-        query_events: Vec<TimedEvent>,
-        pb: &ProgressBar,
-    ) -> eyre::Result<()> {
+    pub fn run(&self, query_events: Vec<TimedEvent>, pb: &ProgressBar) -> eyre::Result<()> {
         let mut sim = Simulation::default();
 
         let (query_sender, receiver) = std::sync::mpsc::channel();
-        write_from_channel(io::BufWriter::new(queries_output), receiver);
+        write_from_channel(
+            io::BufWriter::new(File::create(&self.query_output)?),
+            receiver,
+        );
         let (node_sender, receiver) = std::sync::mpsc::channel();
-        write_from_channel(io::BufWriter::new(nodes_output), receiver);
+        write_from_channel(
+            io::BufWriter::new(File::create(&self.node_output)?),
+            receiver,
+        );
 
         let query_log_id = sim.state.insert(
             QueryLog::new(sim.scheduler.clock(), Duration::from_secs(10))
@@ -436,7 +438,7 @@ impl SimulationConfig {
         let node_incoming_queues: Vec<_> = (0..self.num_nodes)
             .map(|_| {
                 sim.add_queue(NodeQueue::unbounded(select_function(
-                    queue_type,
+                    self.queue_type,
                     Rc::clone(&queries),
                 )))
             })

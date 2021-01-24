@@ -111,6 +111,7 @@ impl TryFrom<Opt> for SimulationConfig {
             num_shards: max_shard + 1,
             dispatcher: opt.dispatcher,
             disabled_nodes: opt.disabled_nodes,
+            queue_type: opt.queue_type,
         })
     }
 }
@@ -153,13 +154,10 @@ fn main() -> eyre::Result<()> {
     if opt.prob_matrix_output.is_some() && opt.dispatcher != DispatcherOption::Probabilistic {
         eyre::bail!("matrix output given but dispatcher is not probabilistic");
     }
-    let query_output = File::create(&opt.query_output)?;
-    let node_output = File::create(&opt.node_output)?;
     set_up_logger(&opt)?;
-    let queue_type = opt.queue_type;
     let conf = SimulationConfig::try_from(opt)?;
     let events = conf.read_query_events()?;
     let pb = ProgressBar::new(events.len() as u64)
         .with_style(ProgressStyle::default_bar().template("{msg} {wide_bar} {percent}%"));
-    conf.run(query_output, node_output, queue_type, events, &pb)
+    conf.run(events, &pb)
 }
