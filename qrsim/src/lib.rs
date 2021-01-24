@@ -609,8 +609,22 @@ fn print_legend() {
     }
 }
 
+/// Type of message to print in the progress bar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MessageType {
+    /// Use only the passed string.
+    Terse(String),
+    /// Print time and statistics.
+    Verbose,
+}
+
 /// Runs the simulation until no more events are present.
-pub fn run_events(simulation: &mut Simulation, key: Key<QueryLog>, pb: &ProgressBar) -> Duration {
+pub fn run_events(
+    simulation: &mut Simulation,
+    key: Key<QueryLog>,
+    pb: &ProgressBar,
+    message_type: MessageType,
+) -> Duration {
     let mut position = 0_u64;
     while simulation.step() {
         let time = simulation.scheduler.time();
@@ -619,31 +633,36 @@ pub fn run_events(simulation: &mut Simulation, key: Key<QueryLog>, pb: &Progress
             .get_mut(key)
             .expect("Missing query log in state");
         let num_finished = query_log.finished_requests() as u64;
+        if let MessageType::Terse(msg) = &message_type {
+            pb.set_message(msg);
+        }
         if position < num_finished {
             position = num_finished;
             pb.set_position(position);
-            pb.set_message(&format!(
-                "[{time}s] \
-                 [{waiting_label}={waiting}] \
-                 [{active_label}={active}] \
-                 [{dropped_label}={dropped}] \
-                 [{finished_label}={finished}] \
-                 [{current_throughput_label}={current}] \
-                 [{overall_throughput_label}={total}]",
-                time = time.as_secs(),
-                active = query_log.active_requests(),
-                finished = num_finished,
-                dropped = query_log.dropped_requests(),
-                waiting = query_log.waiting_requests(),
-                current = query_log.current_throughput().round(),
-                total = query_log.total_throughput().round(),
-                waiting_label = Label::Waiting.short(),
-                active_label = Label::Active.short(),
-                dropped_label = Label::Dropped.short(),
-                finished_label = Label::Finished.short(),
-                current_throughput_label = Label::CurrentThroughput.short(),
-                overall_throughput_label = Label::OverallThroughput.short(),
-            ));
+            if message_type == MessageType::Verbose {
+                pb.set_message(&format!(
+                    "[{time}s] \
+                     [{waiting_label}={waiting}] \
+                     [{active_label}={active}] \
+                     [{dropped_label}={dropped}] \
+                     [{finished_label}={finished}] \
+                     [{current_throughput_label}={current}] \
+                     [{overall_throughput_label}={total}]",
+                    time = time.as_secs(),
+                    active = query_log.active_requests(),
+                    finished = num_finished,
+                    dropped = query_log.dropped_requests(),
+                    waiting = query_log.waiting_requests(),
+                    current = query_log.current_throughput().round(),
+                    total = query_log.total_throughput().round(),
+                    waiting_label = Label::Waiting.short(),
+                    active_label = Label::Active.short(),
+                    dropped_label = Label::Dropped.short(),
+                    finished_label = Label::Finished.short(),
+                    current_throughput_label = Label::CurrentThroughput.short(),
+                    overall_throughput_label = Label::OverallThroughput.short(),
+                ));
+            }
         }
     }
     pb.finish();

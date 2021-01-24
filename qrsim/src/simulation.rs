@@ -61,6 +61,9 @@ pub enum QueueType {
 /// Configuration for a single simulation.
 #[derive(Deserialize)]
 pub struct SimulationConfig {
+    /// Label identifying this config, e.g., in the terminal message.
+    pub label: String,
+
     /// Path to the file containing query times.
     pub queries_path: PathBuf,
 
@@ -412,7 +415,12 @@ impl SimulationConfig {
     ///
     /// May return an error if it fails to read files or the read configuration turns out to be
     /// invalid.
-    pub fn run(&self, query_events: Vec<TimedEvent>, pb: &ProgressBar) -> eyre::Result<()> {
+    pub fn run(
+        &self,
+        query_events: Vec<TimedEvent>,
+        pb: &ProgressBar,
+        message_type: super::MessageType,
+    ) -> eyre::Result<()> {
         let mut sim = Simulation::default();
 
         let (query_sender, receiver) = std::sync::mpsc::channel();
@@ -477,7 +485,7 @@ impl SimulationConfig {
             }
         }
 
-        run_events(&mut sim, query_log_id, &pb);
+        run_events(&mut sim, query_log_id, &pb, message_type);
         Ok(())
     }
 }

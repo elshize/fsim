@@ -100,6 +100,7 @@ impl TryFrom<Opt> for SimulationConfig {
             .ok_or_else(|| eyre!("empty node config"))?;
         let num_nodes = assignment.nodes.len();
         Ok(Self {
+            label: "".into(),
             queries_path: opt.queries_path,
             query_events_path: opt.query_events_path,
             shard_scores_path: opt.shard_scores,
@@ -159,5 +160,5 @@ fn main() -> eyre::Result<()> {
     let events = conf.read_query_events()?;
     let pb = ProgressBar::new(events.len() as u64)
         .with_style(ProgressStyle::default_bar().template("{msg} {wide_bar} {percent}%"));
-    conf.run(events, &pb)
+    conf.run(events, &pb, qrsim::MessageType::Verbose)
 }
