@@ -39,6 +39,9 @@ pub use dispatch::probability::ProbabilisticDispatcher;
 pub use dispatch::round_robin::RoundRobinDispatcher;
 pub use dispatch::Dispatch;
 
+mod simulation;
+pub use simulation::{DispatcherOption, QueueType, SimulationConfig};
+
 /// See [`TimedEvent`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "component")]
@@ -598,6 +601,7 @@ impl QueryResponse {
     }
 }
 
+#[allow(dead_code)]
 fn print_legend() {
     println!("Legend:");
     for label in Label::iter() {
@@ -606,10 +610,7 @@ fn print_legend() {
 }
 
 /// Runs the simulation until no more events are present.
-pub fn run_events(simulation: &mut Simulation, num_queries: usize, key: Key<QueryLog>) -> Duration {
-    print_legend();
-    let pb = ProgressBar::new(num_queries as u64)
-        .with_style(ProgressStyle::default_bar().template("{msg} {wide_bar} {percent}%"));
+pub fn run_events(simulation: &mut Simulation, key: Key<QueryLog>, pb: &ProgressBar) -> Duration {
     let mut position = 0_u64;
     while simulation.step() {
         let time = simulation.scheduler.time();
@@ -724,7 +725,7 @@ pub fn fifo_select<T: node::GetNodeRequest>() -> BoxedSelect<T> {
 }
 
 /// Priority of a node request that always prefers the requests estimated to be shorter.
-#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::cast_possible_wrap)]
 #[must_use]
 pub fn cost_select<T: node::GetNodeRequest>(queries: Rc<Vec<Query>>) -> BoxedSelect<T> {
     Box::new(move |elements: &[T]| {
@@ -738,6 +739,7 @@ pub fn cost_select<T: node::GetNodeRequest>(queries: Rc<Vec<Query>>) -> BoxedSel
 
 /// Priority of a node request that always prefers the requests estimated to be shorter.
 #[must_use]
+#[allow(clippy::clippy::cast_precision_loss)]
 pub fn weighted_cost_select<T: node::GetNodeRequest>(queries: Rc<Vec<Query>>) -> BoxedSelect<T> {
     use rand_chacha::rand_core::SeedableRng;
     use rand_distr::Distribution;

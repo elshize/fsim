@@ -29,6 +29,7 @@ pub enum Event {
 /// Function returning the index of the next element (according to some strategy).
 pub type BoxedSelect<T> = Box<dyn FnMut(&[T]) -> Option<usize>>;
 
+/// Queue holding incoming node requests.
 pub struct NodeQueue<T> {
     inner: Vec<T>,
     capacity: usize,
@@ -36,6 +37,7 @@ pub struct NodeQueue<T> {
 }
 
 impl<T> NodeQueue<T> {
+    /// Constructs an unbounded queue.
     #[must_use]
     pub fn unbounded(select: BoxedSelect<T>) -> Self {
         Self {
@@ -45,6 +47,7 @@ impl<T> NodeQueue<T> {
         }
     }
 
+    /// Constructs a bounded queue with the given capacity.
     #[must_use]
     pub fn bounded(select: BoxedSelect<T>, capacity: usize) -> Self {
         Self {
