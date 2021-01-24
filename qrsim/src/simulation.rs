@@ -70,6 +70,12 @@ pub struct SimulationConfig {
     /// Path to the file containing Taily shard scores.
     pub shard_scores_path: Option<PathBuf>,
 
+    /// Path to the output file with query data.
+    pub query_output: PathBuf,
+
+    /// Path to the output file with node data.
+    pub node_output: PathBuf,
+
     /// Result of shard replica assignment to machines.
     pub assignment: AssignmentResult,
 
