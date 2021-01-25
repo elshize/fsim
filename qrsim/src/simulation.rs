@@ -248,7 +248,12 @@ impl CachedQueries {
                     return Err(CacheLoadError::NewerShardScoreInput);
                 }
             }
-            pb.map(|pb| pb.set_message("Query cache detected. Loading cache"));
+            pb.map(|pb| {
+                pb.set_message(&format!(
+                    "Query cache detected. Loading cache: {}",
+                    meta.file_path.display()
+                ))
+            });
             let cached: CachedQueries =
                 bincode::deserialize_from(cached_file).wrap_err("failed to parse cached file")?;
             if cached.meta.shard_scores_input == meta.shard_scores_input {
@@ -301,6 +306,7 @@ impl SimulationConfig {
     }
 
     fn process_input_queries(
+        &self,
         meta: CacheMetadata,
         pb: Option<&ProgressBar>,
     ) -> eyre::Result<CachedQueries> {
@@ -313,7 +319,7 @@ impl SimulationConfig {
         };
         // log::info!("Reading, processing, and chaching query data. This could take some time.");
         // log::info!("Reading query data...");
-        pb.map(|pb| pb.set_message("Reading query data"));
+        pb.map(|pb| pb.set_message(&format!("{}: Reading query data", self.label)));
         let file = File::open(&meta.query_input).wrap_err_with(error_wrapper)?;
         let rows: eyre::Result<Vec<QueryRow>> = serde_json::Deserializer::from_reader(file)
             .into_iter::<QueryRow>()
@@ -321,7 +327,7 @@ impl SimulationConfig {
             .collect();
         let mut rows = rows.wrap_err_with(error_wrapper)?;
         // log::info!("Queries loaded. Now sorting...");
-        pb.map(|pb| pb.set_message("Sorting query data"));
+        pb.map(|pb| pb.set_message(&format!("{}: Sorting query data", self.label)));
         rows.sort_by(|lhs, rhs| {
             (&lhs.query_id, &lhs.shard_id).cmp(&(&rhs.query_id, &rhs.shard_id))
         });
@@ -331,7 +337,7 @@ impl SimulationConfig {
                 .as_mut()
                 .map_or(Some(None), |iter| Some(iter.next()))
         });
-        pb.map(|pb| pb.set_message("Aggregating query data"));
+        pb.map(|pb| pb.set_message(&format!("{}: Aggregating query data", self.label)));
         // log::info!("Queries sorted. Now processing...");
         let queries = CachedQueries {
             meta,
@@ -351,7 +357,7 @@ impl SimulationConfig {
                 .collect(),
         };
         //log::info!("Queries processed. Now caching...");
-        pb.map(|pb| pb.set_message("Storing cache"));
+        pb.map(|pb| pb.set_message(&format!("{}: Storing cache", self.label)));
         queries.store_cache()?;
         Ok(queries)
     }
@@ -366,7 +372,7 @@ impl SimulationConfig {
             if let CacheLoadError::Io(err) = err {
                 Err(err)
             } else {
-                Self::process_input_queries(meta, Some(pb))
+                self.process_input_queries(meta, Some(pb))
             }
         })
     }
