@@ -510,6 +510,7 @@ impl SimulationConfig {
             responses: responses_key,
         });
 
+        pb.set_length(query_events.len() as u64);
         for event in query_events {
             match event.event {
                 Event::Broker(e) => sim.schedule(event.time, broker, e),
