@@ -248,12 +248,7 @@ impl CachedQueries {
                     return Err(CacheLoadError::NewerShardScoreInput);
                 }
             }
-            pb.map(|pb| {
-                pb.set_message(&format!(
-                    "Query cache detected. Loading cache: {}",
-                    meta.file_path.display()
-                ))
-            });
+            pb.map(|pb| pb.set_message("Query cache detected. Loading cache: {}"));
             let cached: CachedQueries =
                 bincode::deserialize_from(cached_file).wrap_err("failed to parse cached file")?;
             if cached.meta.shard_scores_input == meta.shard_scores_input {
