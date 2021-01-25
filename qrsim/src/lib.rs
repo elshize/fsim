@@ -625,7 +625,11 @@ pub fn run_events(
     pb: &ProgressBar,
     message_type: MessageType,
 ) -> Duration {
+    pb.set_style(ProgressStyle::default_bar().template("{msg} {wide_bar} {percent}%"));
     let mut position = 0_u64;
+    if let MessageType::Terse(msg) = &message_type {
+        pb.set_message(msg);
+    }
     while simulation.step() {
         let time = simulation.scheduler.time();
         let query_log = simulation
@@ -633,9 +637,6 @@ pub fn run_events(
             .get_mut(key)
             .expect("Missing query log in state");
         let num_finished = query_log.finished_requests() as u64;
-        if let MessageType::Terse(msg) = &message_type {
-            pb.set_message(msg);
-        }
         if position < num_finished {
             position = num_finished;
             pb.set_position(position);

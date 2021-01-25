@@ -14,7 +14,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use eyre::WrapErr;
-use indicatif::ProgressBar;
+use indicatif::{ProgressBar, ProgressStyle};
 use itertools::Itertools;
 use ndarray::Array2;
 use serde::{Deserialize, Serialize};
@@ -192,7 +192,8 @@ impl CachedQueries {
     ///   other does not).
     /// - [`CacheLoadError::Io`] when any other errors occur while reading files and computing
     ///   paths.
-    pub fn load(meta: &CacheMetadata) -> Result<Self, CacheLoadError> {
+    pub fn load(meta: &CacheMetadata, pb: Option<&ProgressBar>) -> Result<Self, CacheLoadError> {
+        pb.map(|pb| pb.set_style(ProgressStyle::default_spinner()));
         let cached_file = File::open(&meta.file_path).map_err(|_| CacheLoadError::CacheNotFound)?;
         let query_input =
             File::open(&meta.query_input).wrap_err("unable to open query input file")?;
@@ -217,11 +218,10 @@ impl CachedQueries {
                     return Err(CacheLoadError::NewerShardScoreInput);
                 }
             }
-            log::info!("Query cache detected. Loading cache...");
+            pb.map(|pb| pb.set_message("Query cache detected. Loading cache"));
             let cached: CachedQueries =
                 bincode::deserialize_from(cached_file).wrap_err("failed to parse cached file")?;
             if cached.meta.shard_scores_input == meta.shard_scores_input {
-                log::info!("Cache loaded.");
                 Ok(cached)
             } else {
                 Err(CacheLoadError::DifferentShardScoreInput)
@@ -270,22 +270,28 @@ impl SimulationConfig {
             .transpose()
     }
 
-    fn process_input_queries(meta: CacheMetadata) -> eyre::Result<CachedQueries> {
+    fn process_input_queries(
+        meta: CacheMetadata,
+        pb: Option<&ProgressBar>,
+    ) -> eyre::Result<CachedQueries> {
+        pb.map(|pb| pb.set_style(ProgressStyle::default_spinner()));
         let error_wrapper = || {
             format!(
                 "Failed to load queries from file: `{}`",
                 meta.query_input.display()
             )
         };
-        log::info!("Reading, processing, and chaching query data. This could take some time.");
-        log::info!("Reading query data...");
+        // log::info!("Reading, processing, and chaching query data. This could take some time.");
+        // log::info!("Reading query data...");
+        pb.map(|pb| pb.set_message("Reading query data"));
         let file = File::open(&meta.query_input).wrap_err_with(error_wrapper)?;
         let rows: eyre::Result<Vec<QueryRow>> = serde_json::Deserializer::from_reader(file)
             .into_iter::<QueryRow>()
             .map(|r| Ok(r?))
             .collect();
         let mut rows = rows.wrap_err_with(error_wrapper)?;
-        log::info!("Queries loaded. Now sorting...");
+        // log::info!("Queries loaded. Now sorting...");
+        pb.map(|pb| pb.set_message("Sorting query data"));
         rows.sort_by(|lhs, rhs| {
             (&lhs.query_id, &lhs.shard_id).cmp(&(&rhs.query_id, &rhs.shard_id))
         });
@@ -295,7 +301,8 @@ impl SimulationConfig {
                 .as_mut()
                 .map_or(Some(None), |iter| Some(iter.next()))
         });
-        log::info!("Queries sorted. Now processing...");
+        pb.map(|pb| pb.set_message("Aggregating query data"));
+        // log::info!("Queries sorted. Now processing...");
         let queries = CachedQueries {
             meta,
             queries: rows
@@ -313,7 +320,8 @@ impl SimulationConfig {
                 })
                 .collect(),
         };
-        log::info!("Queries processed. Now caching...");
+        //log::info!("Queries processed. Now caching...");
+        pb.map(|pb| pb.set_message("Storing cache"));
         queries.store_cache()?;
         Ok(queries)
     }
@@ -322,14 +330,13 @@ impl SimulationConfig {
     /// cached file.
     ///
     /// See [`CachedQueries`] for more information.
-    fn queries(&self) -> eyre::Result<CachedQueries> {
+    fn queries(&self, pb: &ProgressBar) -> eyre::Result<CachedQueries> {
         let meta = CacheMetadata::new(&self.queries_path, self.shard_scores_path.as_ref())?;
-        CachedQueries::load(&meta).or_else(|err| {
+        CachedQueries::load(&meta, Some(pb)).or_else(|err| {
             if let CacheLoadError::Io(err) = err {
                 Err(err)
             } else {
-                log::warn!("{}", err);
-                Self::process_input_queries(meta)
+                Self::process_input_queries(meta, Some(pb))
             }
         })
     }
@@ -440,7 +447,7 @@ impl SimulationConfig {
                 .node_sender(node_sender),
         );
 
-        let queries = Rc::new(self.queries()?.queries);
+        let queries = Rc::new(self.queries(&pb)?.queries);
         //let query_events = read_query_events(&self.query_events_path)?;
 
         let node_incoming_queues: Vec<_> = (0..self.num_nodes)
