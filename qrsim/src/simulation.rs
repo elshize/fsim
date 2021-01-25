@@ -512,7 +512,7 @@ impl SimulationConfig {
         });
 
         pb.set_length(query_events.len() as u64);
-        pb.set_draw_delta(pb.length() / 100);
+        pb.set_draw_delta(pb.length() / 10);
         for event in query_events {
             match event.event {
                 Event::Broker(e) => sim.schedule(event.time, broker, e),
