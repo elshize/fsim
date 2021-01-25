@@ -478,10 +478,10 @@ impl SimulationConfig {
 
         let node_incoming_queues: Vec<_> = (0..self.num_nodes)
             .map(|_| {
-                sim.add_queue(NodeQueue::bounded(
-                    select_function(self.queue_type, Rc::clone(&queries)),
-                    1000,
-                ))
+                sim.add_queue(NodeQueue::unbounded(select_function(
+                    self.queue_type,
+                    Rc::clone(&queries),
+                )))
             })
             .collect();
         let broker_response_queue = sim.add_queue(Fifo::default());

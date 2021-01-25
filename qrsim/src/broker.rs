@@ -164,6 +164,14 @@ impl Broker {
         state: &mut State,
         request: QueryRequest,
     ) {
+        if state.get(self.query_log_id).unwrap().active_requests() > 1000 {
+            state
+                .get_mut(self.query_log_id)
+                .unwrap()
+                .drop_request(request);
+            log::warn!("Broker dropped request: {:?}", request);
+            return;
+        };
         log::debug!("Broker picked up request: {:?}", request);
         let query = &self.queries[usize::from(request.query_id)];
         let selection_time = Duration::from_micros(query.selection_time);
