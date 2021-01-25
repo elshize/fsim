@@ -100,7 +100,7 @@ impl TryFrom<Opt> for SimulationConfig {
             .ok_or_else(|| eyre!("empty node config"))?;
         let num_nodes = assignment.nodes.len();
         Ok(Self {
-            label: "".into(),
+            label: qrsim::SimulationLabel::default(),
             queries_path: opt.queries_path,
             query_events_path: opt.query_events_path,
             shard_scores_path: opt.shard_scores,

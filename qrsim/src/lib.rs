@@ -40,7 +40,7 @@ pub use dispatch::round_robin::RoundRobinDispatcher;
 pub use dispatch::Dispatch;
 
 mod simulation;
-pub use simulation::{DispatcherOption, QueueType, SimulationConfig};
+pub use simulation::{DispatcherOption, QueueType, SimulationConfig, SimulationLabel};
 
 /// See [`TimedEvent`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

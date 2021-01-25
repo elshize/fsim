@@ -58,11 +58,41 @@ pub enum QueueType {
     Weighted,
 }
 
+#[allow(missing_docs)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Default)]
+pub struct SimulationLabel {
+    pub collection: String,
+    pub sharding: String,
+    pub ordering: String,
+    pub dispatcher: String,
+    pub queries_per_second: usize,
+    pub queue_type: String,
+    pub disabled_node: Option<usize>,
+}
+
+impl std::fmt::Display for SimulationLabel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}-{}-{}-{}-{}-{}{}",
+            self.collection,
+            self.sharding,
+            self.ordering,
+            self.dispatcher,
+            self.queries_per_second,
+            self.queue_type,
+            self.disabled_node
+                .map(|n| format!("-dis-{}", n))
+                .unwrap_or_default()
+        )
+    }
+}
+
 /// Configuration for a single simulation.
 #[derive(Deserialize)]
 pub struct SimulationConfig {
     /// Label identifying this config, e.g., in the terminal message.
-    pub label: String,
+    pub label: SimulationLabel,
 
     /// Path to the file containing query times.
     pub queries_path: PathBuf,
