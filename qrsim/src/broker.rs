@@ -164,6 +164,10 @@ impl Broker {
         state: &mut State,
         request: QueryRequest,
     ) {
+        state
+            .get_mut(self.query_log_id)
+            .unwrap()
+            .new_request(request);
         if state.get(self.query_log_id).unwrap().active_requests() > 1000 {
             state
                 .get_mut(self.query_log_id)
@@ -180,10 +184,6 @@ impl Broker {
                 .map(ShardId::from)
                 .collect()
         });
-        state
-            .get_mut(self.query_log_id)
-            .unwrap()
-            .new_request(request);
         scheduler.schedule(
             selection_time,
             self_id,
