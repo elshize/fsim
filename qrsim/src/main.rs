@@ -19,7 +19,7 @@ use std::path::PathBuf;
 
 use clap::Clap;
 use eyre::{eyre, WrapErr};
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::ProgressBar;
 
 use optimization::AssignmentResult;
 use qrsim::{DispatcherOption, NodeId, NumCores, QueueType, SimulationConfig};

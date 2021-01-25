@@ -765,18 +765,28 @@ pub fn weighted_cost_select<T: node::GetNodeRequest>(queries: Rc<Vec<Query>>) ->
     use rand_distr::Distribution;
     let mut rng = rand_chacha::ChaChaRng::from_entropy();
     Box::new(move |elements: &[T]| {
-        let weights = elements
+        let weights: Vec<_> = elements
             .iter()
             .map(|e| {
                 let query_id = e.node_request().query_id();
                 let shard_id = e.node_request().shard_id();
                 let query: &Query = &queries[usize::from(query_id)];
-                1_f64 / query.retrieval_times[usize::from(shard_id)] as f64
+                let time = match query.retrieval_times[usize::from(shard_id)] {
+                    0 => 1_f64,
+                    t => t as f64,
+                };
+                1_f64 / time
             })
             .collect();
-        rand_distr::WeightedAliasIndex::new(weights)
+        let idx = rand_distr::WeightedAliasIndex::new(weights.clone())
             .ok()
-            .map(|distr| distr.sample(&mut rng))
+            .map(|distr| distr.sample(&mut rng));
+        assert!(
+            idx.is_some() || elements.is_empty(),
+            "No index selected even though queue non-empty: {:?}",
+            weights
+        );
+        idx
     })
 }
 
