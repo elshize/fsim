@@ -452,12 +452,7 @@ impl SimulationConfig {
     ///
     /// May return an error if it fails to read files or the read configuration turns out to be
     /// invalid.
-    pub fn run(
-        &self,
-        query_events: Vec<TimedEvent>,
-        pb: &ProgressBar,
-        message_type: super::MessageType,
-    ) -> eyre::Result<()> {
+    pub fn run(&self, pb: &ProgressBar, message_type: super::MessageType) -> eyre::Result<()> {
         let mut sim = Simulation::default();
 
         let (query_sender, receiver) = std::sync::mpsc::channel();
@@ -478,7 +473,7 @@ impl SimulationConfig {
         );
 
         let queries = Rc::new(self.queries(&pb)?.queries);
-        //let query_events = read_query_events(&self.query_events_path)?;
+        let query_events = read_query_events(&self.query_events_path)?;
 
         let node_incoming_queues: Vec<_> = (0..self.num_nodes)
             .map(|_| {

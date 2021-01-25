@@ -157,8 +157,6 @@ fn main() -> eyre::Result<()> {
     }
     set_up_logger(&opt)?;
     let conf = SimulationConfig::try_from(opt)?;
-    let events = conf.read_query_events()?;
-    let pb = ProgressBar::new(events.len() as u64)
-        .with_style(ProgressStyle::default_bar().template("{msg} {wide_bar} {percent}%"));
-    conf.run(events, &pb, qrsim::MessageType::Verbose)
+    let pb = ProgressBar::new_spinner();
+    conf.run(&pb, qrsim::MessageType::Verbose)
 }
