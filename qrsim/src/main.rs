@@ -158,5 +158,5 @@ fn main() -> eyre::Result<()> {
     set_up_logger(&opt)?;
     let conf = SimulationConfig::try_from(opt)?;
     let pb = ProgressBar::new_spinner();
-    conf.run(&pb, qrsim::MessageType::Verbose)
+    conf.run(&pb, &qrsim::MessageType::Verbose)
 }

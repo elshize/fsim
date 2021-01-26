@@ -1,8 +1,8 @@
 use crate::{
-    cost_select, fifo_select, run_events, weighted_cost_select, write_from_channel, BoxedSelect,
-    Broker, BrokerQueues, Dispatch, Event, Node, NodeEvent, NodeId, NodeQueue, NodeQueueEntry,
-    NodeResponse, NumCores, ProbabilisticDispatcher, Query, QueryLog, QueryRow, RequestId,
-    ResponseStatus, RoundRobinDispatcher, TimedEvent,
+    run_events, write_from_channel, BoxedSelect, Broker, BrokerQueues, CostSelect, Dispatch, Event,
+    FifoSelect, MessageType, Node, NodeEvent, NodeId, NodeQueue, NodeQueueEntry, NodeResponse,
+    NumCores, ProbabilisticDispatcher, Query, QueryLog, QueryRow, RequestId, ResponseStatus,
+    RoundRobinDispatcher, TimedEvent, WeightedSelect,
 };
 
 use std::cell::RefCell;
@@ -223,7 +223,9 @@ impl CachedQueries {
     /// - [`CacheLoadError::Io`] when any other errors occur while reading files and computing
     ///   paths.
     pub fn load(meta: &CacheMetadata, pb: Option<&ProgressBar>) -> Result<Self, CacheLoadError> {
-        pb.map(|pb| pb.set_style(ProgressStyle::default_spinner()));
+        if let Some(pb) = pb {
+            pb.set_style(ProgressStyle::default_spinner());
+        }
         let cached_file = File::open(&meta.file_path).map_err(|_| CacheLoadError::CacheNotFound)?;
         let query_input =
             File::open(&meta.query_input).wrap_err("unable to open query input file")?;
@@ -248,7 +250,9 @@ impl CachedQueries {
                     return Err(CacheLoadError::NewerShardScoreInput);
                 }
             }
-            pb.map(|pb| pb.set_message("Query cache detected. Loading cache: {}"));
+            if let Some(pb) = pb {
+                pb.set_message("Query cache detected. Loading cache: {}");
+            }
             let cached: CachedQueries =
                 bincode::deserialize_from(cached_file).wrap_err("failed to parse cached file")?;
             if cached.meta.shard_scores_input == meta.shard_scores_input {
@@ -270,9 +274,9 @@ impl CachedQueries {
 
 fn select_function(queue_type: QueueType, queries: Rc<Vec<Query>>) -> BoxedSelect<NodeQueueEntry> {
     match queue_type {
-        QueueType::Fifo => fifo_select(),
-        QueueType::Priority => cost_select(queries),
-        QueueType::Weighted => weighted_cost_select(queries),
+        QueueType::Fifo => Box::new(FifoSelect::default()),
+        QueueType::Priority => Box::new(CostSelect::new(queries)),
+        QueueType::Weighted => Box::new(WeightedSelect::new(queries)),
     }
 }
 
@@ -305,24 +309,27 @@ impl SimulationConfig {
         meta: CacheMetadata,
         pb: Option<&ProgressBar>,
     ) -> eyre::Result<CachedQueries> {
-        pb.map(|pb| pb.set_style(ProgressStyle::default_spinner()));
+        if let Some(pb) = pb {
+            pb.set_style(ProgressStyle::default_spinner());
+        }
         let error_wrapper = || {
             format!(
                 "Failed to load queries from file: `{}`",
                 meta.query_input.display()
             )
         };
-        // log::info!("Reading, processing, and chaching query data. This could take some time.");
-        // log::info!("Reading query data...");
-        pb.map(|pb| pb.set_message(&format!("{}: Reading query data", self.label)));
+        if let Some(pb) = pb {
+            pb.set_message(&format!("{}: Reading query data", self.label));
+        }
         let file = File::open(&meta.query_input).wrap_err_with(error_wrapper)?;
         let rows: eyre::Result<Vec<QueryRow>> = serde_json::Deserializer::from_reader(file)
             .into_iter::<QueryRow>()
             .map(|r| Ok(r?))
             .collect();
         let mut rows = rows.wrap_err_with(error_wrapper)?;
-        // log::info!("Queries loaded. Now sorting...");
-        pb.map(|pb| pb.set_message(&format!("{}: Sorting query data", self.label)));
+        if let Some(pb) = pb {
+            pb.set_message(&format!("{}: Sorting query data", self.label));
+        }
         rows.sort_by(|lhs, rhs| {
             (&lhs.query_id, &lhs.shard_id).cmp(&(&rhs.query_id, &rhs.shard_id))
         });
@@ -332,7 +339,9 @@ impl SimulationConfig {
                 .as_mut()
                 .map_or(Some(None), |iter| Some(iter.next()))
         });
-        pb.map(|pb| pb.set_message(&format!("{}: Aggregating query data", self.label)));
+        if let Some(pb) = pb {
+            pb.set_message(&format!("{}: Aggregating query data", self.label));
+        }
         // log::info!("Queries sorted. Now processing...");
         let queries = CachedQueries {
             meta,
@@ -351,8 +360,9 @@ impl SimulationConfig {
                 })
                 .collect(),
         };
-        //log::info!("Queries processed. Now caching...");
-        pb.map(|pb| pb.set_message(&format!("{}: Storing cache", self.label)));
+        if let Some(pb) = pb {
+            pb.set_message(&format!("{}: Storing cache", self.label));
+        }
         queries.store_cache()?;
         Ok(queries)
     }
@@ -453,7 +463,7 @@ impl SimulationConfig {
     ///
     /// May return an error if it fails to read files or the read configuration turns out to be
     /// invalid.
-    pub fn run(&self, pb: &ProgressBar, message_type: super::MessageType) -> eyre::Result<()> {
+    pub fn run(&self, pb: &ProgressBar, message_type: &MessageType) -> eyre::Result<()> {
         let mut sim = Simulation::default();
 
         let (query_sender, receiver) = std::sync::mpsc::channel();

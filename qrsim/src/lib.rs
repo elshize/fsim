@@ -14,6 +14,8 @@
     clippy::inline_always
 )]
 
+use std::cell::RefCell;
+use std::marker::PhantomData;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -28,7 +30,7 @@ mod broker;
 pub use broker::{Broker, BrokerQueues, Event as BrokerEvent, ResponseStatus};
 
 mod node;
-pub use node::{BoxedSelect, Event as NodeEvent, Node, NodeQueue, NodeQueueEntry};
+pub use node::{BoxedSelect, Event as NodeEvent, Node, NodeQueue, NodeQueueEntry, Select};
 
 mod query_log;
 pub use query_log::{write_from_channel, QueryLog};
@@ -623,7 +625,7 @@ pub fn run_events(
     simulation: &mut Simulation,
     key: Key<QueryLog>,
     pb: &ProgressBar,
-    message_type: MessageType,
+    message_type: &MessageType,
 ) -> Duration {
     pb.set_style(ProgressStyle::default_bar().template("{msg} {wide_bar} {percent}%"));
     let mut position = 0_u64;
@@ -640,7 +642,7 @@ pub fn run_events(
         if position < num_finished {
             position = num_finished;
             pb.set_position(position);
-            if message_type == MessageType::Verbose {
+            if message_type == &MessageType::Verbose {
                 pb.set_message(&format!(
                     "[{time}s] \
                      [{waiting_label}={waiting}] \
@@ -735,60 +737,133 @@ fn select_by_priority<T, F: Fn(&T) -> i64>(elements: &[T], priority: F) -> Optio
 /// Note that this is a FIFO in with respect to the time of the dispatch, not the order in which
 /// the elements are pushed. Consequently, if two requests have the same dispatch time, the order
 /// in which they will be processed is undefined.
-#[must_use]
-pub fn fifo_select<T: node::GetNodeRequest>() -> BoxedSelect<T> {
-    Box::new(|elements: &[T]| {
+pub struct FifoSelect<T>(PhantomData<T>);
+
+impl<T> Default for FifoSelect<T> {
+    fn default() -> Self {
+        FifoSelect(PhantomData)
+    }
+}
+
+impl<T: node::GetNodeRequest> Select for FifoSelect<T> {
+    type Item = T;
+    fn select(&self, elements: &[T]) -> Option<usize> {
         select_by_priority(elements, |entry: &T| {
             -micros(entry.node_request().dispatch_time())
         })
-    })
+    }
 }
 
 /// Priority of a node request that always prefers the requests estimated to be shorter.
-#[allow(clippy::cast_possible_wrap)]
-#[must_use]
-pub fn cost_select<T: node::GetNodeRequest>(queries: Rc<Vec<Query>>) -> BoxedSelect<T> {
-    Box::new(move |elements: &[T]| {
+pub struct CostSelect<T> {
+    queries: Rc<Vec<Query>>,
+    phantom: PhantomData<T>,
+}
+
+impl<T> CostSelect<T> {
+    fn new(queries: Rc<Vec<Query>>) -> Self {
+        Self {
+            queries,
+            phantom: PhantomData,
+        }
+    }
+}
+
+impl<T: node::GetNodeRequest> Select for CostSelect<T> {
+    type Item = T;
+
+    #[allow(clippy::cast_possible_wrap)]
+    fn select(&self, elements: &[T]) -> Option<usize> {
         select_by_priority(elements, |entry: &T| {
             let request = entry.node_request();
-            let query: &Query = &queries[usize::from(request.query_id())];
+            let query: &Query = &self.queries[usize::from(request.query_id())];
             -(query.retrieval_times[usize::from(request.shard_id())] as i64)
         })
-    })
+    }
 }
 
 /// Priority of a node request that always prefers the requests estimated to be shorter.
-#[must_use]
-#[allow(clippy::clippy::cast_precision_loss)]
-pub fn weighted_cost_select<T: node::GetNodeRequest>(queries: Rc<Vec<Query>>) -> BoxedSelect<T> {
-    use rand_chacha::rand_core::SeedableRng;
-    use rand_distr::Distribution;
-    let mut rng = rand_chacha::ChaChaRng::from_entropy();
-    Box::new(move |elements: &[T]| {
+pub struct WeightedSelect<T> {
+    queries: Rc<Vec<Query>>,
+    rng: RefCell<rand_chacha::ChaChaRng>,
+    phantom: PhantomData<T>,
+}
+
+impl<T> WeightedSelect<T> {
+    fn new(queries: Rc<Vec<Query>>) -> Self {
+        use rand_chacha::rand_core::SeedableRng;
+        Self {
+            queries,
+            rng: RefCell::new(rand_chacha::ChaChaRng::from_entropy()),
+            phantom: PhantomData,
+        }
+    }
+}
+
+impl<T: node::GetNodeRequest> Select for WeightedSelect<T> {
+    type Item = T;
+
+    #[allow(clippy::clippy::cast_precision_loss)]
+    fn select(&self, elements: &[T]) -> Option<usize> {
+        use rand_distr::Distribution;
         let weights: Vec<_> = elements
             .iter()
             .map(|e| {
                 let query_id = e.node_request().query_id();
                 let shard_id = e.node_request().shard_id();
-                let query: &Query = &queries[usize::from(query_id)];
-                let time = match query.retrieval_times[usize::from(shard_id)] {
-                    0 => 1_f64,
-                    t => t as f64,
+                let query: &Query = &self.queries[usize::from(query_id)];
+                let time = match query.retrieval_times.get(usize::from(shard_id)) {
+                    Some(0) => 1_f64,
+                    Some(t) => *t as f64,
+                    None => panic!("invalid shard ID"),
                 };
                 1_f64 / time
             })
             .collect();
+        let mut rng = self.rng.borrow_mut();
         let idx = rand_distr::WeightedAliasIndex::new(weights.clone())
             .ok()
-            .map(|distr| distr.sample(&mut rng));
+            .map(|distr| distr.sample(&mut *rng));
         assert!(
             idx.is_some() || elements.is_empty(),
             "No index selected even though queue non-empty: {:?}",
             weights
         );
         idx
-    })
+    }
 }
+
+// #[must_use]
+// #[allow(clippy::clippy::cast_precision_loss)]
+// pub fn epoch_cost_select<T: node::GetNodeRequest>(queries: Rc<Vec<Query>>) -> BoxedSelect<T> {
+//     // use rand_chacha::rand_core::SeedableRng;
+//     // use rand_distr::Distribution;
+//     // let mut rng = rand_chacha::ChaChaRng::from_entropy();
+//     // Box::new(move |elements: &[T]| {
+//     //     let weights: Vec<_> = elements
+//     //         .iter()
+//     //         .map(|e| {
+//     //             let query_id = e.node_request().query_id();
+//     //             let shard_id = e.node_request().shard_id();
+//     //             let query: &Query = &queries[usize::from(query_id)];
+//     //             let time = match query.retrieval_times[usize::from(shard_id)] {
+//     //                 0 => 1_f64,
+//     //                 t => t as f64,
+//     //             };
+//     //             1_f64 / time
+//     //         })
+//     //         .collect();
+//     //     let idx = rand_distr::WeightedAliasIndex::new(weights.clone())
+//     //         .ok()
+//     //         .map(|distr| distr.sample(&mut rng));
+//     //     assert!(
+//     //         idx.is_some() || elements.is_empty(),
+//     //         "No index selected even though queue non-empty: {:?}",
+//     //         weights
+//     //     );
+//     //     idx
+//     // })
+// }
 
 #[cfg(test)]
 mod test {

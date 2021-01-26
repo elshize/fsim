@@ -26,8 +26,17 @@ pub enum Event {
     },
 }
 
+/// Implementors of this trait are used to select the next request out of many waiting in a queue.
+pub trait Select {
+    /// Type of queue element that holds a request.
+    type Item: GetNodeRequest;
+
+    /// Selects the next request to process.
+    fn select(&self, requests: &[Self::Item]) -> Option<usize>;
+}
+
 /// Function returning the index of the next element (according to some strategy).
-pub type BoxedSelect<T> = Box<dyn FnMut(&[T]) -> Option<usize>>;
+pub type BoxedSelect<T> = Box<dyn Select<Item = T>>;
 
 /// Queue holding incoming node requests.
 pub struct NodeQueue<T> {
@@ -58,7 +67,7 @@ impl<T> NodeQueue<T> {
     }
 }
 
-impl<T> Queue for NodeQueue<T> {
+impl<T: GetNodeRequest> Queue for NodeQueue<T> {
     type Item = T;
 
     fn push(&mut self, value: T) -> Result<(), simrs::PushError> {
@@ -71,7 +80,9 @@ impl<T> Queue for NodeQueue<T> {
     }
 
     fn pop(&mut self) -> Option<T> {
-        (self.select)(&mut self.inner).map(|idx| self.inner.swap_remove(idx))
+        self.select
+            .select(&self.inner)
+            .map(|idx| self.inner.swap_remove(idx))
     }
 
     fn len(&self) -> usize {
