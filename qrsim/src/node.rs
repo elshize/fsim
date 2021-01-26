@@ -223,7 +223,7 @@ impl Component for Node {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{fifo_select, test::make_entry, test::NodeQueueEntryStub, QueryId, ShardId};
+    use crate::{test::make_entry, test::NodeQueueEntryStub, FifoSelect, QueryId, ShardId};
     use quickcheck::{Arbitrary, Gen};
     use quickcheck_macros::quickcheck;
 
@@ -248,7 +248,7 @@ mod test {
     #[quickcheck]
     fn test_node_queue_with_requests(ops: Vec<QueueOperation>) -> eyre::Result<()> {
         let mut clock = Duration::default();
-        let mut queue = NodeQueue::<NodeQueueEntryStub>::unbounded(fifo_select());
+        let mut queue = NodeQueue::<NodeQueueEntryStub>::unbounded(Box::new(FifoSelect::default()));
         let mut buffer = vec![];
         for op in ops {
             match op {
