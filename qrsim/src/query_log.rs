@@ -235,6 +235,18 @@ fn write_column<F: Fn(&ResponseOutput) -> i64>(
     Ok(())
 }
 
+fn write_node_column<'a, I: Iterator<Item = i64> + 'a, F: Fn(&'a ResponseOutput) -> I + 'a>(
+    buffer: &'a [ResponseOutput],
+    row_group_writer: &mut dyn RowGroupWriter,
+    f: F,
+) -> Result<(), parquet::errors::ParquetError> {
+    let mut column = row_group_writer.next_column()?.unwrap();
+    let batch = buffer.iter().flat_map(f).collect::<Vec<_>>();
+    get_typed_column_writer_mut::<Int64Type>(&mut column).write_batch(&batch, None, None)?;
+    row_group_writer.close_column(column)?;
+    Ok(())
+}
+
 fn write_row_group(
     buffer: &[ResponseOutput],
     writer: &mut SerializedFileWriter<std::fs::File>,
@@ -249,23 +261,50 @@ fn write_row_group(
     writer.close_row_group(row_group)
 }
 
+fn write_node_row_group(
+    buffer: &[ResponseOutput],
+    writer: &mut SerializedFileWriter<std::fs::File>,
+) -> Result<(), parquet::errors::ParquetError> {
+    // "message schema {
+    // REQUIRED INT64 request_id;
+    // REQUIRED INT64 shard_id;
+    // REQUIRED INT64 node_id;
+    // REQUIRED INT64 time;
+    // }"
+    let mut row_group = writer.next_row_group()?;
+    write_node_column(buffer, row_group.as_mut(), |r| {
+        std::iter::repeat(r.request_id.0 as i64).take(r.node_times.len())
+    })?;
+    write_node_column(buffer, row_group.as_mut(), |r| 0..r.node_times.len() as i64)?;
+    write_node_column(buffer, row_group.as_mut(), |r| {
+        r.node_times.iter().copied().map(|(n, _)| n.0 as i64)
+    })?;
+    write_node_column(buffer, row_group.as_mut(), |r| {
+        r.node_times.iter().copied().map(|(_, t)| t as i64)
+    })?;
+    writer.close_row_group(row_group)
+}
+
 /// Writes messages sent to the receiver until the channel is closed or an error occurred.
-pub fn write_from_channel(file: std::fs::File, receiver: Receiver<ResponseOutput>) {
+pub fn write_from_channel(
+    file: std::fs::File,
+    node_file: std::fs::File,
+    receiver: Receiver<ResponseOutput>,
+) {
     let mut buffer = Vec::<ResponseOutput>::new();
     let mut writer = ResponseOutput::writer(file);
+    let mut node_writer = ResponseOutput::node_writer(node_file);
     std::thread::spawn(move || {
         while let Ok(msg) = receiver.recv() {
             buffer.push(msg);
             if buffer.len() == 1000 {
                 write_row_group(&buffer, &mut writer).expect("failed to write row group");
+                write_node_row_group(&buffer, &mut node_writer).expect("failed to write row group");
                 buffer.clear();
             }
-            // if writer.write_all(msg.as_ref()).is_err() {
-            //     eprintln!("error writing to file");
-            //     break;
-            // }
         }
         writer.close().unwrap();
+        node_writer.close().unwrap();
     });
 }
 

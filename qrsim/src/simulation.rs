@@ -8,7 +8,6 @@ use crate::{
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
@@ -467,7 +466,11 @@ impl SimulationConfig {
         let mut sim = Simulation::default();
 
         let (query_sender, receiver) = std::sync::mpsc::channel();
-        write_from_channel(File::create(&self.query_output)?, receiver);
+        write_from_channel(
+            File::create(&self.query_output)?,
+            File::create(&self.node_output)?,
+            receiver,
+        );
         // let (node_sender, receiver) = std::sync::mpsc::channel();
         // write_from_channel(
         //     io::BufWriter::new(File::create(&self.node_output)?),

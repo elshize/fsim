@@ -560,8 +560,24 @@ impl ResponseOutput {
 }"
     }
 
+    const fn node_schema() -> &'static str {
+        "message schema {
+    REQUIRED INT64 request_id;
+    REQUIRED INT64 shard_id;
+    REQUIRED INT64 node_id;
+    REQUIRED INT64 time;
+}"
+    }
+
     pub fn writer<W: ParquetWriter>(writer: W) -> SerializedFileWriter<W> {
         let schema = Arc::new(parse_message_type(Self::schema()).expect("invalid schema"));
+        let props = Arc::new(WriterProperties::builder().build());
+        SerializedFileWriter::new(writer, schema, props)
+            .expect("failed to create parquet serializer")
+    }
+
+    pub fn node_writer<W: ParquetWriter>(writer: W) -> SerializedFileWriter<W> {
+        let schema = Arc::new(parse_message_type(Self::node_schema()).expect("invalid schema"));
         let props = Arc::new(WriterProperties::builder().build());
         SerializedFileWriter::new(writer, schema, props)
             .expect("failed to create parquet serializer")
