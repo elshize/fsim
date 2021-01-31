@@ -9,7 +9,7 @@ use serde::ser::{SerializeSeq, Serializer};
 use serde::Serialize;
 use simrs::ClockRef;
 
-use crate::{BrokerRequest, NodeResponse, QueryRequest, QueryResponse, RequestId};
+use crate::{BrokerRequest, NodeResponse, QueryRequest, QueryResponse, RequestId, ResponseOutput};
 
 /// Stores the log of queries at different stages of simulation.
 #[derive(Serialize)]
@@ -31,7 +31,7 @@ pub struct QueryLog {
     #[serde(skip_serializing)]
     fail_on_removing: bool,
     #[serde(skip_serializing)]
-    query_sender: Option<Sender<String>>,
+    query_sender: Option<Sender<Vec<u8>>>,
     #[serde(skip_serializing)]
     node_sender: Option<Sender<String>>,
     #[serde(skip_serializing)]
@@ -79,10 +79,7 @@ impl QueryLog {
     }
 
     /// Register a query sender for flushing query log to a file right away.
-    pub fn query_sender(mut self, sender: Sender<String>) -> Self {
-        sender
-            .send(String::from(QueryResponse::csv_header()))
-            .expect("channel closed");
+    pub fn query_sender(mut self, sender: Sender<Vec<u8>>) -> Self {
         self.query_sender = Some(sender);
         self
     }
@@ -198,17 +195,10 @@ impl QueryLog {
                 .responses
                 .remove(&request_id)
                 .expect("entry must exist");
-            sender
-                .send(response.to_csv_record())
-                .expect("channel dropped");
+            let msg = rmp_serde::to_vec(&ResponseOutput::from(&response))
+                .expect("unable to serialize query response");
+            sender.send(msg).expect("channel dropped");
             self.flushed_responses += 1;
-            if let Some(sender) = &self.node_sender {
-                for response in response.received_responses() {
-                    sender
-                        .send(response.to_csv_record())
-                        .expect("channel dropped");
-                }
-            }
         }
     }
 }

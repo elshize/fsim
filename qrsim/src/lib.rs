@@ -519,6 +519,54 @@ pub struct QueryResponse {
     response_time: Duration,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ResponseOutput {
+    #[serde(rename = "rid")]
+    request_id: RequestId,
+
+    #[serde(rename = "qid")]
+    query_id: QueryId,
+
+    #[serde(rename = "gtime")]
+    generation_time: u64,
+
+    #[serde(rename = "btime")]
+    broker_time: u64,
+
+    #[serde(rename = "dtime")]
+    dispatch_time: u64,
+
+    #[serde(rename = "rtime")]
+    response_time: u64,
+
+    #[serde(rename = "nodes")]
+    node_times: Vec<(NodeId, u64)>,
+}
+
+fn micros(time: &Duration) -> u64 {
+    use std::convert::TryFrom;
+    u64::try_from(time.as_micros()).expect("unable to cast u128 to u64")
+}
+
+impl From<&QueryResponse> for ResponseOutput {
+    fn from(response: &QueryResponse) -> Self {
+        let mut nodes = response.received_responses().collect::<Vec<_>>();
+        nodes.sort_by_key(|n| n.request.shard_id.0);
+        Self {
+            request_id: response.request_id(),
+            query_id: response.query_id(),
+            generation_time: micros(&response.generation_time()),
+            broker_time: micros(&response.broker_time()),
+            dispatch_time: micros(&response.dispatch_time),
+            response_time: micros(&response.response_time),
+            node_times: nodes
+                .into_iter()
+                .map(|n| (n.node_id, micros(&(n.end - n.start))))
+                .collect(),
+        }
+    }
+}
+
 impl QueryResponse {
     #[must_use]
     fn new(
@@ -720,7 +768,7 @@ pub fn run_until(simulation: &mut Simulation, time: Duration, key: Key<QueryLog>
 }
 
 #[allow(clippy::cast_possible_truncation)]
-fn micros(duration: Duration) -> i64 {
+fn imicros(duration: Duration) -> i64 {
     duration.as_micros() as i64
 }
 
@@ -749,7 +797,7 @@ impl<T: node::GetNodeRequest> Select for FifoSelect<T> {
     type Item = T;
     fn select(&self, elements: &[T]) -> Option<usize> {
         select_by_priority(elements, |entry: &T| {
-            -micros(entry.node_request().dispatch_time())
+            -imicros(entry.node_request().dispatch_time())
         })
     }
 }
