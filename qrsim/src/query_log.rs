@@ -265,6 +265,7 @@ pub fn write_from_channel(file: std::fs::File, receiver: Receiver<ResponseOutput
             //     break;
             // }
         }
+        writer.close().unwrap();
     });
 }
 
