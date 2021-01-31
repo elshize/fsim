@@ -37,6 +37,8 @@ rmp-serde = "0.15"
 ndarray = "0.14"
 optimization = { path = "../optimization" }
 thiserror = "1"
+parquet = "3"
+parquet_derive = "3"
 
 [dev-dependencies]
 float-cmp = "0.8"

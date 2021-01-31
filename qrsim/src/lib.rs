@@ -17,11 +17,15 @@
 use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use delegate::delegate;
 use derive_more::{Display, From, FromStr, Into};
 use indicatif::{ProgressBar, ProgressStyle};
+use parquet::file::properties::WriterProperties;
+use parquet::file::writer::{ParquetWriter, SerializedFileWriter};
+use parquet::schema::parser::parse_message_type;
 use serde::{Deserialize, Serialize};
 use simrs::{Key, Simulation};
 use strum::IntoEnumIterator;
@@ -519,8 +523,9 @@ pub struct QueryResponse {
     response_time: Duration,
 }
 
+/// Parquet record.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct ResponseOutput {
+pub struct ResponseOutput {
     #[serde(rename = "rid")]
     request_id: RequestId,
 
@@ -541,6 +546,26 @@ struct ResponseOutput {
 
     #[serde(rename = "nodes")]
     node_times: Vec<(NodeId, u64)>,
+}
+
+impl ResponseOutput {
+    const fn schema() -> &'static str {
+        "message schema {
+    REQUIRED INT64 request_id;
+    REQUIRED INT64 query_id;
+    REQUIRED INT64 generation_time;
+    REQUIRED INT64 broker_time;
+    REQUIRED INT64 dispatch_time;
+    REQUIRED INT64 response_time;
+}"
+    }
+
+    pub fn writer<W: ParquetWriter>(writer: W) -> SerializedFileWriter<W> {
+        let schema = Arc::new(parse_message_type(Self::schema()).expect("invalid schema"));
+        let props = Arc::new(WriterProperties::builder().build());
+        SerializedFileWriter::new(writer, schema, props)
+            .expect("failed to create parquet serializer")
+    }
 }
 
 fn micros(time: &Duration) -> u64 {

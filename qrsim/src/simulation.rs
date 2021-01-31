@@ -467,20 +467,16 @@ impl SimulationConfig {
         let mut sim = Simulation::default();
 
         let (query_sender, receiver) = std::sync::mpsc::channel();
-        write_from_channel(
-            io::BufWriter::new(File::create(&self.query_output)?),
-            receiver,
-        );
-        let (node_sender, receiver) = std::sync::mpsc::channel();
-        write_from_channel(
-            io::BufWriter::new(File::create(&self.node_output)?),
-            receiver,
-        );
+        write_from_channel(File::create(&self.query_output)?, receiver);
+        // let (node_sender, receiver) = std::sync::mpsc::channel();
+        // write_from_channel(
+        //     io::BufWriter::new(File::create(&self.node_output)?),
+        //     receiver,
+        // );
 
         let query_log_id = sim.state.insert(
             QueryLog::new(sim.scheduler.clock(), Duration::from_secs(10))
-                .query_sender(query_sender)
-                .node_sender(node_sender),
+                .query_sender(query_sender), // .node_sender(node_sender),
         );
 
         let queries = Rc::new(self.queries(&pb)?.queries);

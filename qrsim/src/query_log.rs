@@ -5,6 +5,9 @@ use std::io;
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
 
+use parquet::column::writer::get_typed_column_writer_mut;
+use parquet::data_type::Int64Type;
+use parquet::file::writer::{FileWriter, RowGroupWriter, SerializedFileWriter};
 use serde::ser::{SerializeSeq, Serializer};
 use serde::Serialize;
 use simrs::ClockRef;
@@ -31,7 +34,7 @@ pub struct QueryLog {
     #[serde(skip_serializing)]
     fail_on_removing: bool,
     #[serde(skip_serializing)]
-    query_sender: Option<Sender<Vec<u8>>>,
+    query_sender: Option<Sender<ResponseOutput>>,
     #[serde(skip_serializing)]
     node_sender: Option<Sender<String>>,
     #[serde(skip_serializing)]
@@ -79,7 +82,7 @@ impl QueryLog {
     }
 
     /// Register a query sender for flushing query log to a file right away.
-    pub fn query_sender(mut self, sender: Sender<Vec<u8>>) -> Self {
+    pub fn query_sender(mut self, sender: Sender<ResponseOutput>) -> Self {
         self.query_sender = Some(sender);
         self
     }
@@ -195,9 +198,9 @@ impl QueryLog {
                 .responses
                 .remove(&request_id)
                 .expect("entry must exist");
-            let msg = rmp_serde::to_vec(&ResponseOutput::from(&response))
-                .expect("unable to serialize query response");
-            sender.send(msg).expect("channel dropped");
+            sender
+                .send(ResponseOutput::from(&response))
+                .expect("channel dropped");
             self.flushed_responses += 1;
         }
     }
@@ -220,8 +223,53 @@ impl Drop for QueryLog {
     }
 }
 
+fn write_column<F: Fn(&ResponseOutput) -> i64>(
+    buffer: &[ResponseOutput],
+    row_group_writer: &mut dyn RowGroupWriter,
+    f: F,
+) -> Result<(), parquet::errors::ParquetError> {
+    let mut column = row_group_writer.next_column()?.unwrap();
+    let batch = buffer.iter().map(f).collect::<Vec<_>>();
+    get_typed_column_writer_mut::<Int64Type>(&mut column).write_batch(&batch, None, None)?;
+    row_group_writer.close_column(column)?;
+    Ok(())
+}
+
+fn write_row_group(
+    buffer: &[ResponseOutput],
+    writer: &mut SerializedFileWriter<std::fs::File>,
+) -> Result<(), parquet::errors::ParquetError> {
+    let mut row_group = writer.next_row_group()?;
+    write_column(buffer, row_group.as_mut(), |r| r.request_id.0 as i64)?;
+    write_column(buffer, row_group.as_mut(), |r| r.query_id.0 as i64)?;
+    write_column(buffer, row_group.as_mut(), |r| r.generation_time as i64)?;
+    write_column(buffer, row_group.as_mut(), |r| r.broker_time as i64)?;
+    write_column(buffer, row_group.as_mut(), |r| r.dispatch_time as i64)?;
+    write_column(buffer, row_group.as_mut(), |r| r.response_time as i64)?;
+    writer.close_row_group(row_group)
+}
+
 /// Writes messages sent to the receiver until the channel is closed or an error occurred.
-pub fn write_from_channel<W, T>(mut writer: W, receiver: Receiver<T>)
+pub fn write_from_channel(file: std::fs::File, receiver: Receiver<ResponseOutput>) {
+    let mut buffer = Vec::<ResponseOutput>::new();
+    let mut writer = ResponseOutput::writer(file);
+    std::thread::spawn(move || {
+        while let Ok(msg) = receiver.recv() {
+            buffer.push(msg);
+            if buffer.len() == 1000 {
+                write_row_group(&buffer, &mut writer).expect("failed to write row group");
+                buffer.clear();
+            }
+            // if writer.write_all(msg.as_ref()).is_err() {
+            //     eprintln!("error writing to file");
+            //     break;
+            // }
+        }
+    });
+}
+
+/// Writes messages sent to the receiver until the channel is closed or an error occurred.
+pub fn _write_from_channel<W, T>(mut writer: W, receiver: Receiver<T>)
 where
     W: io::Write + Send + 'static,
     T: AsRef<[u8]> + Send + 'static,
