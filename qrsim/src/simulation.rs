@@ -530,6 +530,7 @@ impl SimulationConfig {
         }
 
         run_events(&mut sim, query_log_id, &pb, message_type);
+        drop(sim);
         handle.join().expect("couldn't join on the writer thread");
         Ok(())
     }
