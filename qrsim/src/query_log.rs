@@ -303,6 +303,10 @@ pub fn write_from_channel(
                 buffer.clear();
             }
         }
+        if !buffer.is_empty() {
+            write_row_group(&buffer, &mut writer).expect("failed to write row group");
+            write_node_row_group(&buffer, &mut node_writer).expect("failed to write row group");
+        }
         writer.close().unwrap();
         node_writer.close().unwrap();
     })
