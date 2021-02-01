@@ -466,7 +466,7 @@ impl SimulationConfig {
         let mut sim = Simulation::default();
 
         let (query_sender, receiver) = std::sync::mpsc::channel();
-        write_from_channel(
+        let handle = write_from_channel(
             File::create(&self.query_output)?,
             File::create(&self.node_output)?,
             receiver,
@@ -530,6 +530,7 @@ impl SimulationConfig {
         }
 
         run_events(&mut sim, query_log_id, &pb, message_type);
+        handle.join().expect("couldn't join on the writer thread");
         Ok(())
     }
 }

@@ -290,7 +290,7 @@ pub fn write_from_channel(
     file: std::fs::File,
     node_file: std::fs::File,
     receiver: Receiver<ResponseOutput>,
-) {
+) -> std::thread::JoinHandle<()> {
     let mut buffer = Vec::<ResponseOutput>::new();
     let mut writer = ResponseOutput::writer(file);
     let mut node_writer = ResponseOutput::node_writer(node_file);
@@ -305,7 +305,7 @@ pub fn write_from_channel(
         }
         writer.close().unwrap();
         node_writer.close().unwrap();
-    });
+    })
 }
 
 /// Writes messages sent to the receiver until the channel is closed or an error occurred.
