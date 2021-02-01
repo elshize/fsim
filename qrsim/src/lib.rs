@@ -757,7 +757,6 @@ pub fn run_events(
             }
         }
     }
-    pb.finish();
     simulation.scheduler.time()
 }
 
