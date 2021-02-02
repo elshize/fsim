@@ -66,7 +66,7 @@ pub struct SimulationLabel {
     pub dispatcher: String,
     pub queries_per_second: usize,
     pub queue_type: String,
-    pub disabled_node: Option<usize>,
+    pub disabled_nodes: Vec<usize>,
 }
 
 impl std::fmt::Display for SimulationLabel {
@@ -80,9 +80,11 @@ impl std::fmt::Display for SimulationLabel {
             self.dispatcher,
             self.queries_per_second,
             self.queue_type,
-            self.disabled_node
-                .map(|n| format!("-dis-{}", n))
-                .unwrap_or_default()
+            if self.disabled_nodes.is_empty() {
+                String::new()
+            } else {
+                format!("dis-{}", self.disabled_nodes.iter().format("+"))
+            }
         )
     }
 }
