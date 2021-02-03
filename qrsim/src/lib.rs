@@ -716,7 +716,11 @@ pub fn run_events(
     pb: &ProgressBar,
     message_type: &MessageType,
 ) -> Duration {
-    pb.set_style(ProgressStyle::default_bar().template("{msg} {wide_bar} {percent}%"));
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("{msg} {wide_bar} {percent}%")
+            .progress_chars("=> "),
+    );
     let mut position = 0_u64;
     if let MessageType::Terse(msg) = &message_type {
         pb.set_message(msg);
