@@ -247,6 +247,7 @@ fn write_node_column<'a, I: Iterator<Item = i64> + 'a, F: Fn(&'a ResponseOutput)
     Ok(())
 }
 
+#[allow(clippy::clippy::cast_possible_wrap)]
 fn write_row_group(
     buffer: &[ResponseOutput],
     writer: &mut SerializedFileWriter<std::fs::File>,

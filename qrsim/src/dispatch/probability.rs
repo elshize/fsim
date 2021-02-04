@@ -1,4 +1,4 @@
-use super::{Dispatch, NodeId, ShardId};
+use super::{Dispatch, NodeId, ShardId, State};
 
 use std::cell::RefCell;
 
@@ -223,7 +223,7 @@ impl ProbabilisticDispatcher {
 }
 
 impl Dispatch for ProbabilisticDispatcher {
-    fn dispatch(&self, shards: &[ShardId]) -> Vec<(ShardId, NodeId)> {
+    fn dispatch(&self, shards: &[ShardId], _: &State) -> Vec<(ShardId, NodeId)> {
         shards
             .iter()
             .map(|s| {

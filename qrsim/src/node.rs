@@ -65,6 +65,11 @@ impl<T> NodeQueue<T> {
             select,
         }
     }
+
+    /// Iterate queue elements.
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.inner.iter()
+    }
 }
 
 impl<T: GetNodeRequest> Queue for NodeQueue<T> {

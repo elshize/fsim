@@ -41,8 +41,10 @@ pub use query_log::{write_from_channel, QueryLog};
 
 mod dispatch;
 pub use dispatch::dummy::DummyDispatcher;
+pub use dispatch::least_loaded::LeastLoadedDispatch;
 pub use dispatch::probability::ProbabilisticDispatcher;
 pub use dispatch::round_robin::RoundRobinDispatcher;
+pub use dispatch::shortest_queue::ShortestQueueDispatch;
 pub use dispatch::Dispatch;
 
 mod simulation;
@@ -569,6 +571,7 @@ impl ResponseOutput {
 }"
     }
 
+    /// Constructs a query parquet writer.
     pub fn writer<W: ParquetWriter>(writer: W) -> SerializedFileWriter<W> {
         let schema = Arc::new(parse_message_type(Self::schema()).expect("invalid schema"));
         let props = Arc::new(WriterProperties::builder().build());
@@ -576,6 +579,7 @@ impl ResponseOutput {
             .expect("failed to create parquet serializer")
     }
 
+    /// Constructs a node parquet writer.
     pub fn node_writer<W: ParquetWriter>(writer: W) -> SerializedFileWriter<W> {
         let schema = Arc::new(parse_message_type(Self::node_schema()).expect("invalid schema"));
         let props = Arc::new(WriterProperties::builder().build());

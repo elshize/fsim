@@ -235,7 +235,7 @@ impl Broker {
         let dispatch_overhead = Duration::from_micros(0);
         let mut response_status = ResponseStatus::new(shards.len());
         let request = Rc::new(request);
-        for (shard_id, node_id) in self.dispatcher.borrow().dispatch(&shards) {
+        for (shard_id, node_id) in self.dispatcher.borrow().dispatch(&shards, &state) {
             let queue = self.queues.node[usize::from(node_id)];
             let request = NodeRequest::new(Rc::clone(&request), shard_id, scheduler.time());
             let entry = NodeQueueEntry::new(request.clone(), self_id);

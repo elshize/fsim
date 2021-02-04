@@ -1,8 +1,9 @@
 use crate::{
     run_events, write_from_channel, BoxedSelect, Broker, BrokerQueues, CostSelect, Dispatch, Event,
-    FifoSelect, MessageType, Node, NodeEvent, NodeId, NodeQueue, NodeQueueEntry, NodeResponse,
-    NumCores, ProbabilisticDispatcher, Query, QueryLog, QueryRow, RequestId, ResponseStatus,
-    RoundRobinDispatcher, TimedEvent, WeightedSelect,
+    FifoSelect, LeastLoadedDispatch, MessageType, Node, NodeEvent, NodeId, NodeQueue,
+    NodeQueueEntry, NodeResponse, NumCores, ProbabilisticDispatcher, Query, QueryLog, QueryRow,
+    RequestId, ResponseStatus, RoundRobinDispatcher, ShortestQueueDispatch, TimedEvent,
+    WeightedSelect,
 };
 
 use std::cell::RefCell;
@@ -32,11 +33,19 @@ type NodeComponentId = ComponentId<NodeEvent>;
 pub enum DispatcherOption {
     /// See [`RoundRobinDispatcher`].
     RoundRobin,
+
     /// Dispatches uniformly across available machines. See [`ProbabilisticDispatcher`].
     Uniform,
+
     /// Dispatchers with optimized probabilities computed at the beginning of the simulation.
     /// See [`ProbabilisticDispatcher`].
     Probabilistic,
+
+    /// See [`ShortestQueueDispatch`].
+    ShortestQueue,
+
+    /// See [`LeastLoadedDispatch`].
+    LeastLoaded,
 }
 
 /// Type of queue for incoming shard requests in nodes.
@@ -448,13 +457,26 @@ impl SimulationConfig {
     ///
     /// This function might return an error because if `matrix_output.is_some()`, then the result
     /// of probability optimization will be stored in this file, and thus an I/O could occur.
-    fn dispatcher(&self) -> eyre::Result<Box<dyn Dispatch>> {
+    fn dispatcher(
+        &self,
+        node_queues: &[QueueId<NodeQueue<NodeQueueEntry>>],
+        queries: &Rc<Vec<Query>>,
+    ) -> eyre::Result<Box<dyn Dispatch>> {
         match self.dispatcher {
             DispatcherOption::RoundRobin => {
                 Ok(Box::new(RoundRobinDispatcher::new(&self.assignment.nodes)))
             }
             DispatcherOption::Probabilistic => self.optimized_probabilistic_dispatcher(),
             DispatcherOption::Uniform => self.uniform_probabilistic_dispatcher(),
+            DispatcherOption::ShortestQueue => Ok(Box::new(ShortestQueueDispatch::new(
+                &self.assignment.nodes,
+                Vec::from(node_queues),
+            ))),
+            DispatcherOption::LeastLoaded => Ok(Box::new(LeastLoadedDispatch::new(
+                &self.assignment.nodes,
+                Vec::from(node_queues),
+                Rc::clone(queries),
+            ))),
         }
     }
 
@@ -506,7 +528,7 @@ impl SimulationConfig {
         let responses_key = sim
             .state
             .insert(HashMap::<RequestId, ResponseStatus>::new());
-        let mut dispatcher = self.dispatcher()?;
+        let mut dispatcher = self.dispatcher(&node_incoming_queues, &queries)?;
         for &node_id in &self.disabled_nodes {
             dispatcher.disable_node(node_id)?;
         }
