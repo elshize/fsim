@@ -306,6 +306,17 @@ impl ReplicaAssignment {
             .0
     }
 
+    /// Calculates the maximum load across all machines with respect to the the weights in the load
+    /// matrix `loads`.
+    #[must_use]
+    pub fn machine_load_variance(&self, loads: ArrayView2<'_, f32>) -> f32 {
+        let mean = self.machine_loads(&loads).sum::<f32>() / self.num_machines() as f32;
+        self.machine_loads(&loads)
+            .map(|l| (l - mean).powi(2))
+            .sum::<f32>()
+            / self.num_machines() as f32
+    }
+
     /// Returns two vectors containing indices of the cells in the given column that have value
     /// `false` and `true`, respectively.
     fn partition_column_by_value(&self, shard: usize) -> (Vec<usize>, Vec<usize>) {
@@ -328,7 +339,7 @@ impl<'p, R: Rng> Population<'p, R> {
         })
         .filter_map(|a| {
             a.ok().map(|a| {
-                let load = a.max_machine_load(loads.view());
+                let load = a.machine_load_variance(loads.view());
                 (a, load)
             })
         })
@@ -346,7 +357,7 @@ impl<'p, R: Rng> Population<'p, R> {
         })
         .filter_map(|a| {
             a.ok().map(|a| {
-                let load = a.max_machine_load(loads.view());
+                let load = a.machine_load_variance(loads.view());
                 (a, load)
             })
         })
@@ -388,7 +399,7 @@ impl<'p, R: Rng> Population<'p, R> {
             .par_iter()
             .map_with(rng, move |mut rng, (p, _)| {
                 let mutated = p.random_move(&mut rng);
-                let load = mutated.max_machine_load(loads.view());
+                let load = mutated.machine_load_variance(loads.view());
                 (mutated, load)
             })
             .collect();
@@ -398,7 +409,7 @@ impl<'p, R: Rng> Population<'p, R> {
             .par_iter()
             .map_with(rng, move |mut rng, (p, _)| {
                 let swapped = p.clone().random_swap(&mut rng);
-                let load = swapped.max_machine_load(loads.view());
+                let load = swapped.machine_load_variance(loads.view());
                 (swapped, load)
             })
             .collect();
