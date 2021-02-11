@@ -1,9 +1,9 @@
 use crate::{
     run_events, write_from_channel, BoxedSelect, Broker, BrokerQueues, CostSelect, Dispatch, Event,
     FifoSelect, LeastLoadedDispatch, MessageType, Node, NodeEvent, NodeId, NodeQueue,
-    NodeQueueEntry, NodeResponse, NumCores, ProbabilisticDispatcher, Query, QueryLog, QueryRow,
-    RequestId, ResponseStatus, RoundRobinDispatcher, ShortestQueueDispatch, TimedEvent,
-    WeightedSelect,
+    NodeQueueEntry, NodeResponse, NodeThreadPool, NumCores, ProbabilisticDispatcher, Query,
+    QueryLog, QueryRow, RequestId, ResponseStatus, RoundRobinDispatcher, ShortestQueueDispatch,
+    TimedEvent, WeightedSelect,
 };
 
 use std::cell::RefCell;
@@ -18,7 +18,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use itertools::Itertools;
 use ndarray::Array2;
 use serde::{Deserialize, Serialize};
-use simrs::{ComponentId, Fifo, QueueId, Simulation};
+use simrs::{ComponentId, Fifo, Key, QueueId, Simulation};
 
 use optimization::AssignmentResult;
 
@@ -395,23 +395,38 @@ impl SimulationConfig {
     /// Inserts the node components into `simulation`, and returns a vector of IDs of the
     /// registered components.
     fn nodes(
-        &self,
         simulation: &mut Simulation,
         incoming_queues: &[QueueId<NodeQueue<NodeQueueEntry>>],
         outcoming_queue: QueueId<Fifo<NodeResponse>>,
         queries: &Rc<Vec<Query>>,
+        thread_pools: &[Key<NodeThreadPool>],
     ) -> Vec<NodeComponentId> {
         incoming_queues
             .iter()
             .enumerate()
-            .map(|(id, incoming)| {
+            .zip(thread_pools)
+            .map(|((id, incoming), &thread_pool)| {
                 simulation.add_component(Node::new(
                     NodeId::from(id),
                     Rc::clone(&queries),
                     *incoming,
                     outcoming_queue,
-                    self.num_cores.into(),
+                    thread_pool,
                 ))
+            })
+            .collect()
+    }
+
+    fn node_thread_pools(
+        &self,
+        simulation: &mut Simulation,
+        num_nodes: usize,
+    ) -> Vec<Key<NodeThreadPool>> {
+        (0..num_nodes)
+            .map(|_| {
+                simulation
+                    .state
+                    .insert(NodeThreadPool::new(self.num_cores.into()))
             })
             .collect()
     }
@@ -461,6 +476,7 @@ impl SimulationConfig {
         &self,
         node_queues: &[QueueId<NodeQueue<NodeQueueEntry>>],
         queries: &Rc<Vec<Query>>,
+        thread_pools: &[Key<NodeThreadPool>],
     ) -> eyre::Result<Box<dyn Dispatch>> {
         match self.dispatcher {
             DispatcherOption::RoundRobin => {
@@ -471,11 +487,13 @@ impl SimulationConfig {
             DispatcherOption::ShortestQueue => Ok(Box::new(ShortestQueueDispatch::new(
                 &self.assignment.nodes,
                 Vec::from(node_queues),
+                Vec::from(thread_pools),
             ))),
             DispatcherOption::LeastLoaded => Ok(Box::new(LeastLoadedDispatch::new(
                 &self.assignment.nodes,
                 Vec::from(node_queues),
                 Rc::clone(queries),
+                Vec::from(thread_pools),
             ))),
         }
     }
@@ -519,16 +537,18 @@ impl SimulationConfig {
             .collect();
         let broker_response_queue = sim.add_queue(Fifo::default());
 
-        let node_ids = self.nodes(
+        let thread_pools = self.node_thread_pools(&mut sim, node_incoming_queues.len());
+        let node_ids = Self::nodes(
             &mut sim,
             &node_incoming_queues,
             broker_response_queue,
             &queries,
+            &thread_pools,
         );
         let responses_key = sim
             .state
             .insert(HashMap::<RequestId, ResponseStatus>::new());
-        let mut dispatcher = self.dispatcher(&node_incoming_queues, &queries)?;
+        let mut dispatcher = self.dispatcher(&node_incoming_queues, &queries, &thread_pools)?;
         for &node_id in &self.disabled_nodes {
             dispatcher.disable_node(node_id)?;
         }

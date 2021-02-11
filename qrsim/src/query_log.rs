@@ -262,16 +262,11 @@ fn write_row_group(
     writer.close_row_group(row_group)
 }
 
+#[allow(clippy::clippy::cast_possible_wrap)]
 fn write_node_row_group(
     buffer: &[ResponseOutput],
     writer: &mut SerializedFileWriter<std::fs::File>,
 ) -> Result<(), parquet::errors::ParquetError> {
-    // "message schema {
-    // REQUIRED INT64 request_id;
-    // REQUIRED INT64 shard_id;
-    // REQUIRED INT64 node_id;
-    // REQUIRED INT64 time;
-    // }"
     let mut row_group = writer.next_row_group()?;
     write_node_column(buffer, row_group.as_mut(), |r| {
         std::iter::repeat(r.request_id.0 as i64).take(r.node_times.len())

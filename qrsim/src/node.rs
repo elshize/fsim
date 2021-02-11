@@ -1,6 +1,5 @@
-use crate::{BrokerEvent, NodeId, NodeRequest, NodeResponse, Query};
+use crate::{BrokerEvent, NodeId, NodeRequest, NodeResponse, Query, RequestId};
 
-use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -125,6 +124,86 @@ impl GetNodeRequest for NodeQueueEntry {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct RunningThread {
+    pub request_id: RequestId,
+    pub start: Duration,
+    pub estimated: Duration,
+}
+
+/// Stores number of active and idle threads in a node.
+pub struct NodeThreadPool {
+    active: usize,
+    idle: usize,
+    running: Vec<RunningThread>,
+}
+
+impl NodeThreadPool {
+    /// Constructs a new node thread pool with the given number of threads. Initially, all threads
+    /// are idle.
+    #[must_use]
+    pub fn new(num_threads: usize) -> Self {
+        Self {
+            active: 0,
+            idle: num_threads,
+            running: Vec::with_capacity(num_threads),
+        }
+    }
+
+    fn request_thread(&mut self) -> bool {
+        if self.idle > 0 {
+            self.idle -= 1;
+            self.active += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn release_thread(&mut self) {
+        self.idle += 1;
+        self.active -= 1;
+    }
+
+    fn start_request(&mut self, request_id: RequestId, start: Duration, estimated: Duration) {
+        self.running.push(RunningThread {
+            request_id,
+            start,
+            estimated,
+        });
+    }
+
+    fn finish_request(&mut self, request_id: RequestId) {
+        if let Some(idx) = self.running.iter_mut().enumerate().find_map(|(idx, r)| {
+            if r.request_id == request_id {
+                Some(idx)
+            } else {
+                None
+            }
+        }) {
+            self.running.swap_remove(idx);
+        }
+    }
+
+    /// Returns the number of active threads in the node.
+    #[must_use]
+    pub fn num_active(&self) -> usize {
+        self.active
+    }
+
+    /// Returns the number of idle threads in the node.
+    #[must_use]
+    pub fn num_idle(&self) -> usize {
+        self.idle
+    }
+
+    /// Returns the slice of running threads.
+    #[must_use]
+    pub fn running_threads(&self) -> &[RunningThread] {
+        &self.running
+    }
+}
+
 /// A node is responsible for executing a query on one of its replicas and returning these results
 /// to the broker.
 ///
@@ -135,7 +214,7 @@ pub struct Node {
     queries: Rc<Vec<Query>>,
     incoming: QueueId<NodeQueue<NodeQueueEntry>>,
     outgoing: QueueId<Fifo<NodeResponse>>,
-    idle_cores: Cell<usize>,
+    thread_pool: Key<NodeThreadPool>,
 }
 
 impl Node {
@@ -146,15 +225,21 @@ impl Node {
         queries: Rc<Vec<Query>>,
         incoming: QueueId<NodeQueue<NodeQueueEntry>>,
         outgoing: QueueId<Fifo<NodeResponse>>,
-        num_cores: usize,
+        thread_pool: Key<NodeThreadPool>,
     ) -> Self {
         Self {
             id,
             queries,
             incoming,
             outgoing,
-            idle_cores: Cell::new(num_cores),
+            thread_pool,
         }
+    }
+
+    fn thread_pool<'a>(&self, state: &'a mut State) -> &'a mut NodeThreadPool {
+        state
+            .get_mut(self.thread_pool)
+            .expect("missing thread pool")
     }
 }
 
@@ -171,9 +256,7 @@ impl Component for Node {
         match event {
             Event::Idle | Event::NewRequest => {
                 log::trace!("Node is idle");
-                let idle_cores = self.idle_cores.get();
-                if idle_cores > 0 {
-                    self.idle_cores.replace(idle_cores - 1);
+                if self.thread_pool(state).request_thread() {
                     if let Some(NodeQueueEntry {
                         request, broker, ..
                     }) = state.recv(self.incoming)
@@ -183,10 +266,17 @@ impl Component for Node {
                             self.id,
                             request.request_id()
                         );
-                        let time = self.queries[usize::from(request.query_id())].retrieval_times
-                            [usize::from(request.shard_id)];
+                        let time = Duration::from_micros(
+                            self.queries[usize::from(request.query_id())].retrieval_times
+                                [usize::from(request.shard_id)],
+                        );
+                        self.thread_pool(state).start_request(
+                            request.request_id(),
+                            scheduler.time(),
+                            time,
+                        );
                         scheduler.schedule(
-                            Duration::from_micros(time),
+                            time,
                             self_id,
                             Event::ProcessingFinished {
                                 start: scheduler.time(),
@@ -195,7 +285,7 @@ impl Component for Node {
                             },
                         );
                     } else {
-                        self.idle_cores.replace(idle_cores);
+                        self.thread_pool(state).release_thread();
                     }
                 }
             }
@@ -207,6 +297,9 @@ impl Component for Node {
                 let request = state
                     .remove(*request_key)
                     .expect("Cannot find node request");
+                let thread_pool = self.thread_pool(state);
+                thread_pool.finish_request(request.request_id());
+                thread_pool.release_thread();
                 if state
                     .send(
                         self.outgoing,
@@ -218,8 +311,6 @@ impl Component for Node {
                 };
                 scheduler.schedule_now(*broker, BrokerEvent::Response);
                 scheduler.schedule_now(self_id, Event::Idle);
-                let idle_cores = self.idle_cores.get();
-                self.idle_cores.replace(idle_cores + 1);
             }
         }
     }

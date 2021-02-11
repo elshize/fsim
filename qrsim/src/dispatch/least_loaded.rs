@@ -1,8 +1,10 @@
 use super::{Dispatch, NodeId, ShardId, State};
-use crate::{NodeQueue, NodeQueueEntry, Query, QueryId};
-use simrs::QueueId;
+use crate::{NodeQueue, NodeQueueEntry, NodeThreadPool, Query, QueryId};
+
 use std::collections::HashSet;
 use std::rc::Rc;
+
+use simrs::{Key, QueueId};
 
 /// Always selects the node with the least load waiting in the queue.
 pub struct LeastLoadedDispatch {
@@ -10,6 +12,7 @@ pub struct LeastLoadedDispatch {
     shards: Vec<Vec<NodeId>>,
     disabled_nodes: HashSet<NodeId>,
     queries: Rc<Vec<Query>>,
+    thread_pools: Vec<Key<NodeThreadPool>>,
 }
 
 impl LeastLoadedDispatch {
@@ -19,12 +22,14 @@ impl LeastLoadedDispatch {
         nodes: &[Vec<usize>],
         node_queues: Vec<QueueId<NodeQueue<NodeQueueEntry>>>,
         queries: Rc<Vec<Query>>,
+        thread_pools: Vec<Key<NodeThreadPool>>,
     ) -> Self {
         Self {
             shards: super::invert_nodes_to_shards(nodes),
             disabled_nodes: HashSet::new(),
             node_queues,
             queries,
+            thread_pools,
         }
     }
 
@@ -35,16 +40,25 @@ impl LeastLoadedDispatch {
             .retrieval_times[shard_id.0]
     }
 
+    #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
     fn select_node(&self, shard_id: ShardId, state: &State) -> NodeId {
         *self.shards[shard_id.0]
             .iter()
             .filter(|n| !self.disabled_nodes.contains(n))
             .min_by_key(|n| {
-                state
+                let running = state
+                    .get(self.thread_pools[n.0])
+                    .expect("unknown thread pool ID")
+                    .running_threads()
+                    .iter()
+                    .map(|t| t.estimated.as_micros() - t.start.as_micros())
+                    .sum::<u128>();
+                let waiting = state
                     .queue(self.node_queues[n.0])
                     .iter()
                     .map(|msg| self.query_time(msg.request.query_id(), shard_id))
-                    .sum::<u64>()
+                    .sum::<u64>();
+                running as u64 + waiting
             })
             .unwrap()
     }

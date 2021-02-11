@@ -1,25 +1,31 @@
 use super::{Dispatch, NodeId, ShardId, State};
-use crate::{NodeQueue, NodeQueueEntry};
+use crate::{NodeQueue, NodeQueueEntry, NodeThreadPool};
 
 use std::collections::HashSet;
 
-use simrs::QueueId;
+use simrs::{Key, QueueId};
 
 /// Always selects the node with the fewer requests in the queue.
 pub struct ShortestQueueDispatch {
     node_queues: Vec<QueueId<NodeQueue<NodeQueueEntry>>>,
     shards: Vec<Vec<NodeId>>,
     disabled_nodes: HashSet<NodeId>,
+    thread_pools: Vec<Key<NodeThreadPool>>,
 }
 
 impl ShortestQueueDispatch {
     /// Constructs a new dispatcher.
     #[must_use]
-    pub fn new(nodes: &[Vec<usize>], node_queues: Vec<QueueId<NodeQueue<NodeQueueEntry>>>) -> Self {
+    pub fn new(
+        nodes: &[Vec<usize>],
+        node_queues: Vec<QueueId<NodeQueue<NodeQueueEntry>>>,
+        thread_pools: Vec<Key<NodeThreadPool>>,
+    ) -> Self {
         Self {
             shards: super::invert_nodes_to_shards(nodes),
             disabled_nodes: HashSet::new(),
             node_queues,
+            thread_pools,
         }
     }
 
@@ -27,7 +33,14 @@ impl ShortestQueueDispatch {
         *self.shards[shard_id.0]
             .iter()
             .filter(|n| !self.disabled_nodes.contains(n))
-            .min_by_key(|n| state.len(self.node_queues[n.0]))
+            .min_by_key(|n| {
+                let queue_len = state.len(self.node_queues[n.0]);
+                let active = state
+                    .get(self.thread_pools[n.0])
+                    .expect("unknown thread pool ID")
+                    .num_active();
+                queue_len + active
+            })
             .unwrap()
     }
 }

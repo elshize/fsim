@@ -34,7 +34,9 @@ mod broker;
 pub use broker::{Broker, BrokerQueues, Event as BrokerEvent, ResponseStatus};
 
 mod node;
-pub use node::{BoxedSelect, Event as NodeEvent, Node, NodeQueue, NodeQueueEntry, Select};
+pub use node::{
+    BoxedSelect, Event as NodeEvent, Node, NodeQueue, NodeQueueEntry, NodeThreadPool, Select,
+};
 
 mod query_log;
 pub use query_log::{write_from_channel, QueryLog};
