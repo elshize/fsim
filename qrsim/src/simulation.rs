@@ -290,6 +290,12 @@ fn select_function(queue_type: QueueType, queries: Rc<Vec<Query>>) -> BoxedSelec
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct ShardScoreRecord {
+    time: u64,
+    scores: Vec<f32>,
+}
+
 impl SimulationConfig {
     /// Reads the input query events.
     ///
@@ -300,14 +306,14 @@ impl SimulationConfig {
         read_query_events(&self.query_events_path)
     }
 
-    fn load_shard_scores(meta: &CacheMetadata) -> eyre::Result<Option<Vec<Vec<f32>>>> {
+    fn load_shard_scores(meta: &CacheMetadata) -> eyre::Result<Option<Vec<ShardScoreRecord>>> {
         meta.shard_scores_input
             .as_ref()
-            .map(|path| -> eyre::Result<Vec<Vec<f32>>> {
+            .map(|path| {
                 log::info!("Queries sorted. Now processing...");
                 let file = File::open(path)?;
                 serde_json::Deserializer::from_reader(file)
-                    .into_iter::<Vec<f32>>()
+                    .into_iter::<ShardScoreRecord>()
                     .map(|r| Ok(r?))
                     .collect()
             })
@@ -361,11 +367,12 @@ impl SimulationConfig {
                 .into_iter()
                 .zip(shard_scores)
                 .map(|((_, rows), scores)| {
+                    let selection_time = scores.as_ref().map(|s| s.time).unwrap_or(0);
                     Query {
-                        selection_time: 0, // TODO
+                        selection_time,
                         selected_shards: None,
                         retrieval_times: rows.map(|r| r.time).collect(),
-                        shard_scores: scores,
+                        shard_scores: scores.map(|s| s.scores),
                     }
                 })
                 .collect(),
