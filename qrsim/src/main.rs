@@ -104,6 +104,7 @@ impl TryFrom<Opt> for SimulationConfig {
             queries_path: opt.queries_path,
             query_events_path: opt.query_events_path,
             shard_scores_path: opt.shard_scores,
+            estimates: None,
             query_output: opt.query_output,
             node_output: opt.node_output,
             num_cores: opt.num_cores,

@@ -50,7 +50,9 @@ pub use dispatch::shortest_queue::ShortestQueueDispatch;
 pub use dispatch::Dispatch;
 
 mod simulation;
-pub use simulation::{DispatcherOption, QueueType, SimulationConfig, SimulationLabel};
+pub use simulation::{
+    DispatcherOption, EstimatesConfig, QueueType, SimulationConfig, SimulationLabel,
+};
 
 /// See [`TimedEvent`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -237,6 +239,39 @@ pub struct Query {
 
     /// Shard scores for selective search and prioritizing shards during peak loads.
     pub shard_scores: Option<Vec<f32>>,
+}
+
+/// Query running time estimate data.
+#[derive(Debug)]
+pub enum QueryEstimate {
+    /// Each shard estimate is equal.
+    Uniform(u64),
+    /// Each shard estimate is explicitly provided.
+    Explicit(Vec<u64>),
+}
+
+impl QueryEstimate {
+    /// Constructs a new query estimate entry that takes a global estimate and assumes all shards
+    /// take the same portion of it. See [`ShardQueryEstimate::Uniform`].
+    pub fn uniform(global: u64, num_shards: usize) -> Self {
+        Self::Uniform(global / num_shards as u64)
+    }
+
+    /// Constructs a new query estimate entry that takes a global estimate and assumes all shards
+    /// take the same portion of it. See [`ShardQueryEstimate::Uniform`].
+    pub fn explicit(estimates: Vec<u64>) -> Self {
+        Self::Explicit(estimates)
+    }
+
+    /// Returns the estimated time for the query running on the given shard.
+    pub fn shard_estimate(&self, shard_id: ShardId) -> u64 {
+        match self {
+            QueryEstimate::Uniform(time) => *time,
+            QueryEstimate::Explicit(estimates) => {
+                *estimates.get(shard_id.0).expect("shard ID out of bounds")
+            }
+        }
+    }
 }
 
 /// A query request sent to the broker by the query generator.

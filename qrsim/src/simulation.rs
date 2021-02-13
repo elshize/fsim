@@ -2,13 +2,14 @@ use crate::{
     run_events, write_from_channel, BoxedSelect, Broker, BrokerQueues, CostSelect, Dispatch, Event,
     FifoSelect, LeastLoadedDispatch, MessageType, Node, NodeEvent, NodeId, NodeQueue,
     NodeQueueEntry, NodeResponse, NodeThreadPool, NumCores, ProbabilisticDispatcher, Query,
-    QueryLog, QueryRow, RequestId, ResponseStatus, RoundRobinDispatcher, ShortestQueueDispatch,
-    TimedEvent, WeightedSelect,
+    QueryEstimate, QueryLog, QueryRow, RequestId, ResponseStatus, RoundRobinDispatcher,
+    ShortestQueueDispatch, TimedEvent, WeightedSelect,
 };
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
@@ -98,6 +99,22 @@ impl std::fmt::Display for SimulationLabel {
     }
 }
 
+/// Query estimate input config.
+#[derive(Deserialize)]
+pub enum EstimatesConfig {
+    /// Divides the global query estimate, provided in the given file, by the number of shards.
+    Uniform(PathBuf),
+    /// Times for all shards are explicitly provided in the file as JSON arrays, one per line.
+    Explicit(PathBuf),
+    /// Multiply the global time estimate by the given weights.
+    Weighted {
+        /// Global estimate file.
+        global: PathBuf,
+        /// Weights file.
+        weights: PathBuf,
+    },
+}
+
 /// Configuration for a single simulation.
 #[derive(Deserialize)]
 pub struct SimulationConfig {
@@ -112,6 +129,9 @@ pub struct SimulationConfig {
 
     /// Path to the file containing Taily shard scores.
     pub shard_scores_path: Option<PathBuf>,
+
+    /// Path to the global query time estimates.
+    pub estimates: Option<EstimatesConfig>,
 
     /// Path to the output file with query data.
     pub query_output: PathBuf,
@@ -399,6 +419,52 @@ impl SimulationConfig {
         })
     }
 
+    fn estimates(&self, _queries: &[Query]) -> eyre::Result<Option<Vec<QueryEstimate>>> {
+        if let Some(estimates) = &self.estimates {
+            match estimates {
+                EstimatesConfig::Uniform(global) => BufReader::new(File::open(global)?)
+                    .lines()
+                    .map(|l| -> eyre::Result<QueryEstimate> {
+                        Ok(QueryEstimate::uniform(l?.parse()?, self.num_shards))
+                    })
+                    .collect(),
+                // EstimatesConfig::Clairvoyant => Ok(Some(
+                //     queries
+                //         .iter()
+                //         .map(|q| Explicit(q.retrieval_times.clone()))
+                //         .collect(),
+                // )),
+                EstimatesConfig::Explicit(path) => {
+                    let file = File::open(path)?;
+                    serde_json::Deserializer::from_reader(file)
+                        .into_iter()
+                        .map(|v| Ok(QueryEstimate::explicit(v?)))
+                        .collect()
+                }
+                EstimatesConfig::Weighted { global, weights } => {
+                    let global = BufReader::new(File::open(global)?).lines();
+                    let weights = serde_json::Deserializer::from_reader(File::open(weights)?)
+                        .into_iter::<Vec<f32>>();
+                    global
+                        .zip(weights)
+                        .map(|(time, weights)| -> eyre::Result<QueryEstimate> {
+                            let time: u64 = time?.parse()?;
+                            Ok(QueryEstimate::explicit(
+                                weights?
+                                    .into_iter()
+                                    .map(|w| (time as f32 * w).round() as u64)
+                                    .collect(),
+                            ))
+                        })
+                        .collect::<eyre::Result<Vec<_>>>()
+                }
+            }
+            .map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Inserts the node components into `simulation`, and returns a vector of IDs of the
     /// registered components.
     fn nodes(
@@ -482,9 +548,12 @@ impl SimulationConfig {
     fn dispatcher(
         &self,
         node_queues: &[QueueId<NodeQueue<NodeQueueEntry>>],
-        queries: &Rc<Vec<Query>>,
+        _queries: &Rc<Vec<Query>>,
+        estimates: Option<&Rc<Vec<QueryEstimate>>>,
         thread_pools: &[Key<NodeThreadPool>],
     ) -> eyre::Result<Box<dyn Dispatch>> {
+        let estimates =
+            estimates.ok_or_else(|| eyre::eyre!("least loaded dispatch needs estimates"))?;
         match self.dispatcher {
             DispatcherOption::RoundRobin => {
                 Ok(Box::new(RoundRobinDispatcher::new(&self.assignment.nodes)))
@@ -499,7 +568,7 @@ impl SimulationConfig {
             DispatcherOption::LeastLoaded => Ok(Box::new(LeastLoadedDispatch::new(
                 &self.assignment.nodes,
                 Vec::from(node_queues),
-                Rc::clone(queries),
+                Rc::clone(estimates),
                 Vec::from(thread_pools),
             ))),
         }
@@ -532,6 +601,7 @@ impl SimulationConfig {
         );
 
         let queries = Rc::new(self.queries(&pb)?.queries);
+        let estimates = self.estimates(queries.as_ref())?.map(Rc::new);
         let query_events = read_query_events(&self.query_events_path)?;
 
         let node_incoming_queues: Vec<_> = (0..self.num_nodes)
@@ -555,7 +625,12 @@ impl SimulationConfig {
         let responses_key = sim
             .state
             .insert(HashMap::<RequestId, ResponseStatus>::new());
-        let mut dispatcher = self.dispatcher(&node_incoming_queues, &queries, &thread_pools)?;
+        let mut dispatcher = self.dispatcher(
+            &node_incoming_queues,
+            &queries,
+            estimates.as_ref(),
+            &thread_pools,
+        )?;
         for &node_id in &self.disabled_nodes {
             dispatcher.disable_node(node_id)?;
         }

@@ -8,6 +8,10 @@ edition = "2018"
 name = "assign-replicas"
 path = "src/assign_replicas.rs"
 
+[[bench]]
+name = "lp"
+harness = false
+
 [dependencies]
 color-eyre = "0.4"
 rand = "0.7"
@@ -33,3 +37,4 @@ proptest = "0.10"
 tempfile = "3.1"
 testing = { path = "../testing" }
 approx = "0.4"
+criterion = "0.3"
