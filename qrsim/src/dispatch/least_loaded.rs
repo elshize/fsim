@@ -37,14 +37,14 @@ impl LeastLoadedDispatch {
     }
 
     fn query_time(&self, query_id: QueryId, shard_id: ShardId) -> u64 {
-        self.queries
-            .get(query_id.0)
-            .expect("query out of bounds")
-            .retrieval_times[shard_id.0]
-        // self.estimates
+        // self.queries
         //     .get(query_id.0)
         //     .expect("query out of bounds")
-        //     .shard_estimate(shard_id)
+        //     .retrieval_times[shard_id.0]
+        self.estimates
+            .get(query_id.0)
+            .expect("query out of bounds")
+            .shard_estimate(shard_id)
     }
 
     #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
