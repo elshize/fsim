@@ -53,20 +53,19 @@ impl LeastLoadedDispatch {
             .iter()
             .filter(|n| !self.disabled_nodes.contains(n))
             .min_by_key(|n| {
-                // let running = state
-                //     .get(self.thread_pools[n.0])
-                //     .expect("unknown thread pool ID")
-                //     .running_threads()
-                //     .iter()
-                //     .map(|t| t.estimated.as_micros() - t.start.as_micros())
-                //     .sum::<u128>();
+                let running = state
+                    .get(self.thread_pools[n.0])
+                    .expect("unknown thread pool ID")
+                    .running_threads()
+                    .iter()
+                    .map(|t| t.estimated.as_micros() - t.start.as_micros())
+                    .sum::<u128>();
                 let waiting = state
                     .queue(self.node_queues[n.0])
                     .iter()
                     .map(|msg| self.query_time(msg.request.query_id(), shard_id))
                     .sum::<u64>();
-                waiting
-                // running as u64 + waiting
+                running as u64 + waiting
             })
             .unwrap()
     }
