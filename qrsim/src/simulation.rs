@@ -570,7 +570,7 @@ impl SimulationConfig {
     fn dispatcher(
         &self,
         node_queues: &[QueueId<NodeQueue<NodeQueueEntry>>],
-        _queries: &Rc<Vec<Query>>,
+        queries: &Rc<Vec<Query>>,
         estimates: Option<&Rc<Vec<QueryEstimate>>>,
         thread_pools: &[Key<NodeThreadPool>],
     ) -> eyre::Result<Box<dyn Dispatch>> {
@@ -591,6 +591,7 @@ impl SimulationConfig {
                 &self.assignment.nodes,
                 Vec::from(node_queues),
                 Rc::clone(estimates),
+                Rc::clone(queries),
                 Vec::from(thread_pools),
             ))),
         }

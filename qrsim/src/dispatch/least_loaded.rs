@@ -1,5 +1,5 @@
 use super::{Dispatch, NodeId, ShardId, State};
-use crate::{NodeQueue, NodeQueueEntry, NodeThreadPool, QueryEstimate, QueryId};
+use crate::{NodeQueue, NodeQueueEntry, NodeThreadPool, Query, QueryEstimate, QueryId};
 
 use std::collections::HashSet;
 use std::rc::Rc;
@@ -12,6 +12,7 @@ pub struct LeastLoadedDispatch {
     shards: Vec<Vec<NodeId>>,
     disabled_nodes: HashSet<NodeId>,
     estimates: Rc<Vec<QueryEstimate>>,
+    queries: Rc<Vec<Query>>,
     thread_pools: Vec<Key<NodeThreadPool>>,
 }
 
@@ -22,6 +23,7 @@ impl LeastLoadedDispatch {
         nodes: &[Vec<usize>],
         node_queues: Vec<QueueId<NodeQueue<NodeQueueEntry>>>,
         estimates: Rc<Vec<QueryEstimate>>,
+        queries: Rc<Vec<Query>>,
         thread_pools: Vec<Key<NodeThreadPool>>,
     ) -> Self {
         Self {
@@ -29,15 +31,20 @@ impl LeastLoadedDispatch {
             disabled_nodes: HashSet::new(),
             node_queues,
             estimates,
+            queries,
             thread_pools,
         }
     }
 
     fn query_time(&self, query_id: QueryId, shard_id: ShardId) -> u64 {
-        self.estimates
+        self.queries
             .get(query_id.0)
             .expect("query out of bounds")
-            .shard_estimate(shard_id)
+            .retrieval_times[shard_id.0]
+        // self.estimates
+        //     .get(query_id.0)
+        //     .expect("query out of bounds")
+        //     .shard_estimate(shard_id)
     }
 
     #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
