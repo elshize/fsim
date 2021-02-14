@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
-use eyre::WrapErr;
+use eyre::{eyre, WrapErr};
 use indicatif::{ProgressBar, ProgressStyle};
 use itertools::Itertools;
 use ndarray::Array2;
@@ -297,7 +297,15 @@ impl CachedQueries {
 
     /// Stores the query cache.
     fn store_cache(&self) -> eyre::Result<()> {
-        bincode::serialize_into(File::create(&self.meta.file_path)?, self)?;
+        bincode::serialize_into(
+            File::create(&self.meta.file_path).wrap_err_with(|| {
+                eyre::eyre!(
+                    "unable to store query cache in {}",
+                    self.meta.file_path.display()
+                )
+            })?,
+            self,
+        )?;
         Ok(())
     }
 }
@@ -331,7 +339,9 @@ impl SimulationConfig {
             .as_ref()
             .map(|path| {
                 log::info!("Queries sorted. Now processing...");
-                let file = File::open(path)?;
+                let file = File::open(path).wrap_err_with(|| {
+                    eyre!("unable to load shard scores from: {}", path.display())
+                })?;
                 serde_json::Deserializer::from_reader(file)
                     .into_iter::<ShardScoreRecord>()
                     .map(|r| Ok(r?))
@@ -422,12 +432,16 @@ impl SimulationConfig {
     fn estimates(&self, _queries: &[Query]) -> eyre::Result<Option<Vec<QueryEstimate>>> {
         if let Some(estimates) = &self.estimates {
             match estimates {
-                EstimatesConfig::Uniform(global) => BufReader::new(File::open(global)?)
+                EstimatesConfig::Uniform(global) => {
+                    BufReader::new(File::open(global).wrap_err_with(|| {
+                        eyre!("unable to read estimates from {}", global.display())
+                    })?)
                     .lines()
                     .map(|l| -> eyre::Result<QueryEstimate> {
                         Ok(QueryEstimate::uniform(l?.parse()?, self.num_shards))
                     })
-                    .collect(),
+                    .collect()
+                }
                 // EstimatesConfig::Clairvoyant => Ok(Some(
                 //     queries
                 //         .iter()
@@ -435,16 +449,23 @@ impl SimulationConfig {
                 //         .collect(),
                 // )),
                 EstimatesConfig::Explicit(path) => {
-                    let file = File::open(path)
-                        .wrap_err_with(|| eyre::eyre!("cannot open: {}", path.display()))?;
+                    let file = File::open(path).wrap_err_with(|| {
+                        eyre::eyre!("unable to read explicit estimates from {}", path.display())
+                    })?;
                     serde_json::Deserializer::from_reader(file)
                         .into_iter()
                         .map(|v| Ok(QueryEstimate::explicit(v?)))
                         .collect()
                 }
                 EstimatesConfig::Weighted { global, weights } => {
-                    let global = BufReader::new(File::open(global)?).lines();
-                    let weights = serde_json::Deserializer::from_reader(File::open(weights)?)
+                    let global = BufReader::new(File::open(global).wrap_err_with(|| {
+                        eyre!("unable to read estimates from {}", global.display())
+                    })?)
+                    .lines();
+                    let weights =
+                        serde_json::Deserializer::from_reader(File::open(weights).wrap_err_with(
+                            || eyre!("unable to read weights from {}", weights.display()),
+                        )?)
                         .into_iter::<Vec<f32>>();
                     global
                         .zip(weights)
