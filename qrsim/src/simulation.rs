@@ -435,7 +435,8 @@ impl SimulationConfig {
                 //         .collect(),
                 // )),
                 EstimatesConfig::Explicit(path) => {
-                    let file = File::open(path)?;
+                    let file = File::open(path)
+                        .wrap_err_with(|| eyre::eyre!("cannot open: {}", path.display()))?;
                     serde_json::Deserializer::from_reader(file)
                         .into_iter()
                         .map(|v| Ok(QueryEstimate::explicit(v?)))
