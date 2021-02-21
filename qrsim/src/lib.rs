@@ -47,11 +47,12 @@ pub use dispatch::least_loaded::LeastLoadedDispatch;
 pub use dispatch::probability::ProbabilisticDispatcher;
 pub use dispatch::round_robin::RoundRobinDispatcher;
 pub use dispatch::shortest_queue::ShortestQueueDispatch;
+pub use dispatch::opt_plus::OptPlusDispatch;
 pub use dispatch::Dispatch;
 
 mod simulation;
 pub use simulation::{
-    DispatcherOption, EstimatesConfig, QueueType, SimulationConfig, SimulationLabel,
+    DispatcherOption, EstimatesConfig, QueueType, SimulationConfig, SimulationLabel
 };
 
 /// See [`TimedEvent`].

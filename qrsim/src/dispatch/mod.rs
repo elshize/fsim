@@ -5,6 +5,7 @@ use simrs::State;
 
 pub mod dummy;
 pub mod least_loaded;
+pub mod opt_plus;
 pub mod probability;
 pub mod round_robin;
 pub mod shortest_queue;

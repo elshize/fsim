@@ -1,9 +1,9 @@
 use crate::{
     run_events, write_from_channel, BoxedSelect, Broker, BrokerQueues, CostSelect, Dispatch, Event,
     FifoSelect, LeastLoadedDispatch, MessageType, Node, NodeEvent, NodeId, NodeQueue,
-    NodeQueueEntry, NodeResponse, NodeThreadPool, NumCores, ProbabilisticDispatcher, Query,
-    QueryEstimate, QueryLog, QueryRow, RequestId, ResponseStatus, RoundRobinDispatcher,
-    ShortestQueueDispatch, TimedEvent, WeightedSelect,
+    NodeQueueEntry, NodeResponse, NodeThreadPool, NumCores, OptPlusDispatch,
+    ProbabilisticDispatcher, Query, QueryEstimate, QueryLog, QueryRow, RequestId, ResponseStatus,
+    RoundRobinDispatcher, ShortestQueueDispatch, TimedEvent, WeightedSelect,
 };
 
 use std::cell::RefCell;
@@ -47,6 +47,9 @@ pub enum DispatcherOption {
 
     /// See [`LeastLoadedDispatch`].
     LeastLoaded,
+
+    /// See [`OptPlusDispatch`].
+    OptPlus,
 }
 
 /// Type of queue for incoming shard requests in nodes.
@@ -526,7 +529,7 @@ impl SimulationConfig {
             .collect()
     }
 
-    fn optimized_probabilistic_dispatcher(&self) -> eyre::Result<Box<dyn Dispatch>> {
+    fn optimized_probabilistic_dispatcher(&self) -> eyre::Result<ProbabilisticDispatcher> {
         let weights = Array2::from_shape_vec(
             (self.num_nodes, self.num_shards),
             self.assignment
@@ -537,7 +540,11 @@ impl SimulationConfig {
                 .collect_vec(),
         )
         .wrap_err("invavlid nodes config")?;
-        Ok(Box::new(ProbabilisticDispatcher::adaptive(weights)?))
+        Ok(ProbabilisticDispatcher::adaptive(weights)?)
+    }
+
+    fn boxed_optimized_probabilistic_dispatcher(&self) -> eyre::Result<Box<dyn Dispatch>> {
+        Ok(Box::new(self.optimized_probabilistic_dispatcher()?))
     }
 
     #[allow(clippy::cast_precision_loss)]
@@ -580,7 +587,7 @@ impl SimulationConfig {
             DispatcherOption::RoundRobin => {
                 Ok(Box::new(RoundRobinDispatcher::new(&self.assignment.nodes)))
             }
-            DispatcherOption::Probabilistic => self.optimized_probabilistic_dispatcher(),
+            DispatcherOption::Probabilistic => self.boxed_optimized_probabilistic_dispatcher(),
             DispatcherOption::Uniform => self.uniform_probabilistic_dispatcher(),
             DispatcherOption::ShortestQueue => Ok(Box::new(ShortestQueueDispatch::new(
                 &self.assignment.nodes,
@@ -593,6 +600,15 @@ impl SimulationConfig {
                 Rc::clone(estimates),
                 Rc::clone(queries),
                 Vec::from(thread_pools),
+            ))),
+            DispatcherOption::OptPlus => Ok(Box::new(OptPlusDispatch::new(
+                &self.assignment.nodes,
+                Vec::from(node_queues),
+                Rc::clone(estimates),
+                Rc::clone(queries),
+                Vec::from(thread_pools),
+                self.optimized_probabilistic_dispatcher()?,
+                0.75,
             ))),
         }
     }

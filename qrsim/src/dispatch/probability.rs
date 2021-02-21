@@ -220,18 +220,17 @@ impl ProbabilisticDispatcher {
             Ok(changed)
         }
     }
+
+    pub(crate) fn select_node(&self, shard_id: ShardId) -> NodeId {
+        let distr = self.shards.get(shard_id.0).expect("shard ID out of bounds");
+        let mut rng = self.rng.borrow_mut();
+        NodeId::from(distr.sample(&mut *rng))
+    }
 }
 
 impl Dispatch for ProbabilisticDispatcher {
     fn dispatch(&self, shards: &[ShardId], _: &State) -> Vec<(ShardId, NodeId)> {
-        shards
-            .iter()
-            .map(|s| {
-                let distr = self.shards.get(s.0).expect("shard ID out of bounds");
-                let mut rng = self.rng.borrow_mut();
-                (*s, NodeId::from(distr.sample(&mut *rng)))
-            })
-            .collect()
+        shards.iter().map(|&s| (s, self.select_node(s))).collect()
     }
 
     fn num_nodes(&self) -> usize {
