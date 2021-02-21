@@ -583,8 +583,7 @@ impl SimulationConfig {
         estimates: Option<&Rc<Vec<QueryEstimate>>>,
         thread_pools: &[Key<NodeThreadPool>],
     ) -> eyre::Result<Box<dyn Dispatch>> {
-        let estimates =
-            estimates.ok_or_else(|| eyre::eyre!("least loaded dispatch needs estimates"))?;
+        let error_msg = || eyre::eyre!("least loaded dispatch needs estimates");
         match self.dispatcher {
             DispatcherOption::RoundRobin => {
                 Ok(Box::new(RoundRobinDispatcher::new(&self.assignment.nodes)))
@@ -594,7 +593,7 @@ impl SimulationConfig {
                 self.optimized_probabilistic_dispatcher()?.with_load_info(
                     crate::dispatch::probability::Load {
                         queues: Vec::from(node_queues),
-                        estimates: Rc::clone(estimates),
+                        estimates: Rc::clone(estimates.ok_or_else(error_msg)?),
                         thread_pools: Vec::from(thread_pools),
                     },
                 ),
@@ -608,14 +607,14 @@ impl SimulationConfig {
             DispatcherOption::LeastLoaded => Ok(Box::new(LeastLoadedDispatch::new(
                 &self.assignment.nodes,
                 Vec::from(node_queues),
-                Rc::clone(estimates),
+                Rc::clone(estimates.ok_or_else(error_msg)?),
                 Rc::clone(queries),
                 Vec::from(thread_pools),
             ))),
             DispatcherOption::OptPlus => Ok(Box::new(OptPlusDispatch::new(
                 &self.assignment.nodes,
                 Vec::from(node_queues),
-                Rc::clone(estimates),
+                Rc::clone(estimates.ok_or_else(error_msg)?),
                 Rc::clone(queries),
                 Vec::from(thread_pools),
                 self.optimized_probabilistic_dispatcher()?,
