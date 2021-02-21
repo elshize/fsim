@@ -273,10 +273,16 @@ fn write_node_row_group(
     })?;
     write_node_column(buffer, row_group.as_mut(), |r| 0..r.node_times.len() as i64)?;
     write_node_column(buffer, row_group.as_mut(), |r| {
-        r.node_times.iter().copied().map(|(n, _)| n.0 as i64)
+        r.node_times.iter().map(|n| n.node_id.0 as i64)
     })?;
     write_node_column(buffer, row_group.as_mut(), |r| {
-        r.node_times.iter().copied().map(|(_, t)| t as i64)
+        r.node_times.iter().map(|n| n.dispatch_time as i64)
+    })?;
+    write_node_column(buffer, row_group.as_mut(), |r| {
+        r.node_times.iter().map(|n| n.start_time as i64)
+    })?;
+    write_node_column(buffer, row_group.as_mut(), |r| {
+        r.node_times.iter().map(|n| n.end_time as i64)
     })?;
     writer.close_row_group(row_group)
 }

@@ -585,7 +585,15 @@ pub struct ResponseOutput {
     response_time: u64,
 
     #[serde(rename = "nodes")]
-    node_times: Vec<(NodeId, u64)>,
+    node_times: Vec<NodeOutput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct NodeOutput {
+    node_id: NodeId,
+    dispatch_time: u64,
+    start_time: u64,
+    end_time: u64,
 }
 
 impl ResponseOutput {
@@ -605,7 +613,9 @@ impl ResponseOutput {
     REQUIRED INT64 request_id;
     REQUIRED INT64 shard_id;
     REQUIRED INT64 node_id;
-    REQUIRED INT64 time;
+    REQUIRED INT64 dispatch_time;
+    REQUIRED INT64 start_time;
+    REQUIRED INT64 end_time;
 }"
     }
 
@@ -635,16 +645,22 @@ impl From<&QueryResponse> for ResponseOutput {
     fn from(response: &QueryResponse) -> Self {
         let mut nodes = response.received_responses().collect::<Vec<_>>();
         nodes.sort_by_key(|n| n.request.shard_id.0);
+        let dispatch_time = micros(&response.dispatch_time);
         Self {
             request_id: response.request_id(),
             query_id: response.query_id(),
             generation_time: micros(&response.generation_time()),
             broker_time: micros(&response.broker_time()),
-            dispatch_time: micros(&response.dispatch_time),
+            dispatch_time,
             response_time: micros(&response.response_time),
             node_times: nodes
                 .into_iter()
-                .map(|n| (n.node_id, micros(&(n.end - n.start))))
+                .map(|n| NodeOutput {
+                    node_id: n.node_id,
+                    dispatch_time,
+                    start_time: micros(&n.start),
+                    end_time: micros(&n.end),
+                })
                 .collect(),
         }
     }
