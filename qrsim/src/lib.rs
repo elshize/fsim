@@ -44,15 +44,15 @@ pub use query_log::{write_from_channel, QueryLog};
 mod dispatch;
 pub use dispatch::dummy::DummyDispatcher;
 pub use dispatch::least_loaded::LeastLoadedDispatch;
+pub use dispatch::opt_plus::OptPlusDispatch;
 pub use dispatch::probability::ProbabilisticDispatcher;
 pub use dispatch::round_robin::RoundRobinDispatcher;
 pub use dispatch::shortest_queue::ShortestQueueDispatch;
-pub use dispatch::opt_plus::OptPlusDispatch;
 pub use dispatch::Dispatch;
 
 mod simulation;
 pub use simulation::{
-    DispatcherOption, EstimatesConfig, QueueType, SimulationConfig, SimulationLabel
+    DispatcherOption, EstimatesConfig, QueueType, SimulationConfig, SimulationLabel,
 };
 
 /// See [`TimedEvent`].
@@ -767,6 +767,7 @@ pub fn run_events(
     if let MessageType::Terse(msg) = &message_type {
         pb.set_message(msg);
     }
+    pb.set_position(position);
     while simulation.step() {
         let time = simulation.scheduler.time();
         let query_log = simulation
