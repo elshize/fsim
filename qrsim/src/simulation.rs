@@ -608,7 +608,7 @@ impl SimulationConfig {
                 Rc::clone(queries),
                 Vec::from(thread_pools),
                 self.optimized_probabilistic_dispatcher()?,
-                0.75,
+                0.875,
             ))),
         }
     }
