@@ -1,13 +1,16 @@
 use super::{Dispatch, NodeId, ShardId, State};
+use crate::{NodeQueue, NodeQueueEntry, NodeThreadPool, Query, QueryEstimate, QueryId};
 
 use std::cell::RefCell;
+use std::rc::Rc;
 
 use eyre::{Result, WrapErr};
-use ndarray::{Array1, Array2, ArrayView2};
+use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use optimization::Optimizer;
 use rand_chacha::{rand_core::SeedableRng, ChaChaRng};
 use rand_distr::weighted_alias::WeightedAliasIndex;
 use rand_distr::Distribution;
+use simrs::{Key, QueueId};
 
 #[derive(Debug)]
 struct Weight {
@@ -55,6 +58,12 @@ impl WeightMatrix {
         weights.swap_axes(0, 1);
         weights
     }
+
+    fn weights_scaled(&self, nodes: ArrayView1<f32>) -> Array2<f32> {
+        let mut weights = self.weights.t().dot(&Array2::from_diag(&nodes));
+        weights.swap_axes(0, 1);
+        weights
+    }
 }
 
 /// Dispatches according to given probabilities.
@@ -65,6 +74,44 @@ pub struct ProbabilisticDispatcher {
     num_shards: usize,
     rng: RefCell<ChaChaRng>,
     weight_matrix: Option<WeightMatrix>,
+    load: Option<Load>,
+}
+
+pub struct Load {
+    pub(crate) queues: Vec<QueueId<NodeQueue<NodeQueueEntry>>>,
+    pub(crate) estimates: Rc<Vec<QueryEstimate>>,
+    pub(crate) thread_pools: Vec<Key<NodeThreadPool>>,
+}
+
+impl Load {
+    fn query_time(&self, query_id: QueryId, shard_id: ShardId) -> u64 {
+        self.estimates
+            .get(query_id.0)
+            .expect("query out of bounds")
+            .shard_estimate(shard_id)
+    }
+
+    fn machine_weights(&self, state: &State) -> Array1<f32> {
+        let running = self.thread_pools.iter().map(|pool| {
+            state
+                .get(*pool)
+                .expect("unknown thread pool ID")
+                .running_threads()
+                .iter()
+                .map(|t| t.estimated.as_micros())
+                .sum::<u128>() as u64
+        });
+        let waiting = self.queues.iter().map(|queue| {
+            state
+                .queue(*queue)
+                .iter()
+                .map(|msg| self.query_time(msg.request.query_id(), msg.request.shard_id()))
+                .sum::<u64>()
+        });
+        let mut weights: Array1<f32> = running.zip(waiting).map(|(r, w)| (r + w) as f32).collect();
+        weights /= weights.sum();
+        weights
+    }
 }
 
 fn format_weights(weights: &[Weight]) -> String {
@@ -147,6 +194,7 @@ impl ProbabilisticDispatcher {
             shards: calc_distributions(&weights)?,
             weights,
             weight_matrix: None,
+            load: None,
         })
     }
 
@@ -180,6 +228,13 @@ impl ProbabilisticDispatcher {
         let mut dispatcher = Self::with_rng(probabilities.view(), rng)?;
         dispatcher.weight_matrix = Some(WeightMatrix::new(weight_matrix));
         Ok(dispatcher)
+    }
+
+    pub fn with_load_info(self, load: Load) -> Self {
+        Self {
+            load: Some(load),
+            ..self
+        }
     }
 
     fn change_weight_status<F, G>(
@@ -221,16 +276,47 @@ impl ProbabilisticDispatcher {
         }
     }
 
-    pub(crate) fn select_node(&self, shard_id: ShardId) -> NodeId {
-        let distr = self.shards.get(shard_id.0).expect("shard ID out of bounds");
+    fn select_node_from(&self, distr: &WeightedAliasIndex<f32>) -> NodeId {
+        // let distr = self.shards.get(shard_id.0).expect("shard ID out of bounds");
         let mut rng = self.rng.borrow_mut();
         NodeId::from(distr.sample(&mut *rng))
+    }
+
+    pub(crate) fn select_node(&self, shard_id: ShardId) -> NodeId {
+        self.select_node_from(self.shards.get(shard_id.0).expect("shard ID out of bounds"))
+        // let distr = self.shards.get(shard_id.0).expect("shard ID out of bounds");
+        // let mut rng = self.rng.borrow_mut();
+        // NodeId::from(distr.sample(&mut *rng))
     }
 }
 
 impl Dispatch for ProbabilisticDispatcher {
-    fn dispatch(&self, shards: &[ShardId], _: &State) -> Vec<(ShardId, NodeId)> {
-        shards.iter().map(|&s| (s, self.select_node(s))).collect()
+    fn dispatch(&self, shards: &[ShardId], state: &State) -> Vec<(ShardId, NodeId)> {
+        if let Some(load) = &self.load {
+            let matrix = self
+                .weight_matrix
+                .as_ref()
+                .expect("must have weight matrix")
+                .weights_scaled(load.machine_weights(state).view());
+            let probabilities = optimization::LpOptimizer.optimize(matrix.view());
+            let weights = probabilities_to_weights(probabilities.view());
+            let shard_distributions = calc_distributions(&weights).expect("");
+            shards
+                .iter()
+                .map(|&s| {
+                    (
+                        s,
+                        self.select_node_from(
+                            shard_distributions
+                                .get(s.0)
+                                .expect("shard ID out of bounds"),
+                        ),
+                    )
+                })
+                .collect()
+        } else {
+            shards.iter().map(|&s| (s, self.select_node(s))).collect()
+        }
     }
 
     fn num_nodes(&self) -> usize {

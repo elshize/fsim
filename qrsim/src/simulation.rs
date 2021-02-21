@@ -42,6 +42,8 @@ pub enum DispatcherOption {
     /// See [`ProbabilisticDispatcher`].
     Probabilistic,
 
+    UltraOptimized,
+
     /// See [`ShortestQueueDispatch`].
     ShortestQueue,
 
@@ -588,6 +590,15 @@ impl SimulationConfig {
                 Ok(Box::new(RoundRobinDispatcher::new(&self.assignment.nodes)))
             }
             DispatcherOption::Probabilistic => self.boxed_optimized_probabilistic_dispatcher(),
+            DispatcherOption::UltraOptimized => Ok(Box::new(
+                self.optimized_probabilistic_dispatcher()?.with_load_info(
+                    crate::dispatch::probability::Load {
+                        queues: Vec::from(node_queues),
+                        estimates: Rc::clone(estimates),
+                        thread_pools: Vec::from(thread_pools),
+                    },
+                ),
+            )),
             DispatcherOption::Uniform => self.uniform_probabilistic_dispatcher(),
             DispatcherOption::ShortestQueue => Ok(Box::new(ShortestQueueDispatch::new(
                 &self.assignment.nodes,
