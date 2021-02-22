@@ -267,7 +267,7 @@ impl Component for Node {
                             request.request_id()
                         );
                         let time = Duration::from_micros(
-                            self.queries[usize::from(request.query_id())].retrieval_times
+                            self.queries[usize::from(request.query_id()) - 1].retrieval_times
                                 [usize::from(request.shard_id)],
                         );
                         self.thread_pool(state).start_request(

@@ -311,6 +311,7 @@ impl CachedQueries {
             })?,
             self,
         )?;
+        serde_json::to_writer(File::create("/tmp/cache.json")?, self)?;
         Ok(())
     }
 }
@@ -349,7 +350,7 @@ impl SimulationConfig {
                 })?;
                 serde_json::Deserializer::from_reader(file)
                     .into_iter::<ShardScoreRecord>()
-                    .map(|r| Ok(r?))
+                    .map(|r| Ok(r.wrap_err("failed to parse shard scores")?))
                     .collect()
             })
             .transpose()
@@ -373,11 +374,11 @@ impl SimulationConfig {
             pb.set_message(&format!("{}: Reading query data", self.label));
         }
         let file = File::open(&meta.query_input).wrap_err_with(error_wrapper)?;
-        let rows: eyre::Result<Vec<QueryRow>> = serde_json::Deserializer::from_reader(file)
+        let mut rows = serde_json::Deserializer::from_reader(file)
             .into_iter::<QueryRow>()
             .map(|r| Ok(r?))
-            .collect();
-        let mut rows = rows.wrap_err_with(error_wrapper)?;
+            .collect::<eyre::Result<Vec<QueryRow>>>()
+            .wrap_err_with(error_wrapper)?;
         if let Some(pb) = pb {
             pb.set_message(&format!("{}: Sorting query data", self.label));
         }
