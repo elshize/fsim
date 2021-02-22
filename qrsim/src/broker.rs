@@ -185,7 +185,8 @@ impl Broker {
                 .collect()
         });
         scheduler.schedule(
-            selection_time,
+            Duration::default(),
+            //selection_time,
             self_id,
             Event::Dispatch {
                 request: BrokerRequest::new(request, scheduler.time()),
