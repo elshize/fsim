@@ -304,8 +304,8 @@ impl Dispatch for ProbabilisticDispatcher {
                         .collect::<Vec<_>>();
                     let distr = WeightedAliasIndex::new(weights.clone()).unwrap_or_else(|_| {
                         panic!(
-                            "unable to calculate node weight distribution: {:?}",
-                            weights
+                            "unable to calculate node weight distribution: {:?}\n{:?}",
+                            weights, machine_weights
                         )
                     });
                     (s, self.select_node_from(&distr))
