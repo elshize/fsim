@@ -300,9 +300,14 @@ impl Dispatch for ProbabilisticDispatcher {
                         .iter()
                         .map(Weight::value)
                         .zip(&machine_weights)
-                        .map(|(a, b)| a * (1.0 / (b + 1.0)));
-                    let distr = WeightedAliasIndex::new(weights.collect())
-                        .expect("unable to calculate node weight distribution");
+                        .map(|(a, b)| a * (1.0 / (b + 1.0)))
+                        .collect::<Vec<_>>();
+                    let distr = WeightedAliasIndex::new(weights.clone()).unwrap_or_else(|_| {
+                        panic!(
+                            "unable to calculate node weight distribution: {:?}",
+                            weights
+                        )
+                    });
                     (s, self.select_node_from(&distr))
                 })
                 .collect()
