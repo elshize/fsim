@@ -277,41 +277,33 @@ impl ProbabilisticDispatcher {
     }
 
     fn select_node_from(&self, distr: &WeightedAliasIndex<f32>) -> NodeId {
-        // let distr = self.shards.get(shard_id.0).expect("shard ID out of bounds");
         let mut rng = self.rng.borrow_mut();
         NodeId::from(distr.sample(&mut *rng))
     }
 
     pub(crate) fn select_node(&self, shard_id: ShardId) -> NodeId {
         self.select_node_from(self.shards.get(shard_id.0).expect("shard ID out of bounds"))
-        // let distr = self.shards.get(shard_id.0).expect("shard ID out of bounds");
-        // let mut rng = self.rng.borrow_mut();
-        // NodeId::from(distr.sample(&mut *rng))
     }
 }
 
 impl Dispatch for ProbabilisticDispatcher {
     fn dispatch(&self, shards: &[ShardId], state: &State) -> Vec<(ShardId, NodeId)> {
         if let Some(load) = &self.load {
-            let matrix = self
-                .weight_matrix
-                .as_ref()
-                .expect("must have weight matrix")
-                .weights_scaled(load.machine_weights(state).view());
-            let probabilities = optimization::LpOptimizer.optimize(matrix.view());
-            let weights = probabilities_to_weights(probabilities.view());
-            let shard_distributions = calc_distributions(&weights).expect("");
+            let machine_weights = load.machine_weights(state);
             shards
                 .iter()
                 .map(|&s| {
-                    (
-                        s,
-                        self.select_node_from(
-                            shard_distributions
-                                .get(s.0)
-                                .expect("shard ID out of bounds"),
-                        ),
-                    )
+                    let weights = self
+                        .weights
+                        .get(s.0)
+                        .expect("shard ID out of bounds")
+                        .iter()
+                        .map(Weight::value)
+                        .zip(&machine_weights)
+                        .map(|(a, b)| a * b);
+                    let distr = WeightedAliasIndex::new(weights.collect())
+                        .expect("unable to calculate node weight distribution");
+                    (s, self.select_node_from(&distr))
                 })
                 .collect()
         } else {
