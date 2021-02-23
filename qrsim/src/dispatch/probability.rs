@@ -91,6 +91,13 @@ impl Load {
             .shard_estimate(shard_id)
     }
 
+    fn queue_lengths<'a>(&'a self, state: &'a State) -> Vec<usize> {
+        self.queues
+            .iter()
+            .map(|queue_id| state.len(*queue_id))
+            .collect()
+    }
+
     fn machine_weights(&self, state: &State) -> Array1<f32> {
         let running = self.thread_pools.iter().map(|pool| {
             state
@@ -108,9 +115,13 @@ impl Load {
                 .map(|msg| self.query_time(msg.request.query_id(), msg.request.shard_id()))
                 .sum::<u64>()
         });
-        let mut weights: Array1<f32> = running.zip(waiting).map(|(r, w)| (r + w) as f32).collect();
-        weights /= weights.sum();
-        weights
+        let weights: Array1<f32> = running.zip(waiting).map(|(r, w)| (r + w) as f32).collect();
+        let weight_sum = weights.sum();
+        if weight_sum == 0.0 {
+            weights
+        } else {
+            weights / weight_sum
+        }
     }
 }
 
@@ -289,7 +300,8 @@ impl ProbabilisticDispatcher {
 impl Dispatch for ProbabilisticDispatcher {
     fn dispatch(&self, shards: &[ShardId], state: &State) -> Vec<(ShardId, NodeId)> {
         if let Some(load) = &self.load {
-            let machine_weights = load.machine_weights(state);
+            // let machine_weights = load.machine_weights(state);
+            let queue_lengths = load.queue_lengths(state);
             shards
                 .iter()
                 .map(|&s| {
@@ -299,13 +311,13 @@ impl Dispatch for ProbabilisticDispatcher {
                         .expect("shard ID out of bounds")
                         .iter()
                         .map(Weight::value)
-                        .zip(&machine_weights)
-                        .map(|(a, b)| a * (1.0 / (b + 1.0)))
+                        .zip(&queue_lengths)
+                        .map(|(a, b)| a * (1.0 / (*b as f32 + 1.0)))
                         .collect::<Vec<_>>();
                     let distr = WeightedAliasIndex::new(weights.clone()).unwrap_or_else(|_| {
                         panic!(
                             "unable to calculate node weight distribution: {:?}\n{:?}",
-                            weights, machine_weights
+                            weights, queue_lengths
                         )
                     });
                     (s, self.select_node_from(&distr))
