@@ -86,7 +86,7 @@ pub struct Load {
 impl Load {
     fn query_time(&self, query_id: QueryId, shard_id: ShardId) -> u64 {
         self.estimates
-            .get(query_id.0)
+            .get(query_id.0 - 1)
             .expect("query out of bounds")
             .shard_estimate(shard_id)
     }

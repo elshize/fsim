@@ -350,7 +350,7 @@ impl SimulationConfig {
                 })?;
                 serde_json::Deserializer::from_reader(file)
                     .into_iter::<ShardScoreRecord>()
-                    .map(|r| Ok(r.wrap_err("failed to parse shard scores")?))
+                    .map(|r| Ok(r.map_err(|e| eyre!("failed to parse shard scores: {}", e))?))
                     .collect()
             })
             .transpose()

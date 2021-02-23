@@ -42,7 +42,7 @@ impl LeastLoadedDispatch {
         //     .expect("query out of bounds")
         //     .retrieval_times[shard_id.0]
         self.estimates
-            .get(query_id.0)
+            .get(query_id.0 - 1)
             .expect("query out of bounds")
             .shard_estimate(shard_id)
     }
