@@ -94,7 +94,7 @@ impl OptPlusDispatch {
 }
 
 impl Dispatch for OptPlusDispatch {
-    fn dispatch(&self, shards: &[ShardId], state: &State) -> Vec<(ShardId, NodeId)> {
+    fn dispatch(&self, _: QueryId, shards: &[ShardId], state: &State) -> Vec<(ShardId, NodeId)> {
         shards
             .iter()
             .map(|&shard_id| {

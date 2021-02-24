@@ -73,7 +73,7 @@ impl LeastLoadedDispatch {
 }
 
 impl Dispatch for LeastLoadedDispatch {
-    fn dispatch(&self, shards: &[ShardId], state: &State) -> Vec<(ShardId, NodeId)> {
+    fn dispatch(&self, _: QueryId, shards: &[ShardId], state: &State) -> Vec<(ShardId, NodeId)> {
         shards
             .iter()
             .map(|&shard_id| (shard_id, self.select_node(shard_id, &state)))

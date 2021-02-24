@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
 
-use super::{Dispatch, NodeId, ShardId, State};
+use super::{Dispatch, NodeId, QueryId, ShardId, State};
 use itertools::Itertools;
 
 struct RoundRobinShard {
@@ -62,7 +62,7 @@ impl RoundRobinDispatcher {
 }
 
 impl Dispatch for RoundRobinDispatcher {
-    fn dispatch(&self, shards: &[ShardId], _: &State) -> Vec<(ShardId, NodeId)> {
+    fn dispatch(&self, _: QueryId, shards: &[ShardId], _: &State) -> Vec<(ShardId, NodeId)> {
         shards.iter().map(|&s| (s, self.next_node(s))).collect()
     }
     fn num_nodes(&self) -> usize {

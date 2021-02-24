@@ -1,4 +1,4 @@
-use crate::{NodeId, ShardId};
+use crate::{NodeId, QueryId, ShardId};
 
 use itertools::Itertools;
 use simrs::State;
@@ -13,7 +13,12 @@ pub mod shortest_queue;
 /// Implementors are dispatch policies that select nodes for requested shards.
 pub trait Dispatch {
     /// Selects a node for each requested shard.
-    fn dispatch(&self, shards: &[ShardId], state: &State) -> Vec<(ShardId, NodeId)>;
+    fn dispatch(
+        &self,
+        query_id: QueryId,
+        shards: &[ShardId],
+        state: &State,
+    ) -> Vec<(ShardId, NodeId)>;
 
     /// Total number of existing shards.
     fn num_shards(&self) -> usize;

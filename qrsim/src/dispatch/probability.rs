@@ -298,9 +298,23 @@ impl ProbabilisticDispatcher {
 }
 
 impl Dispatch for ProbabilisticDispatcher {
-    fn dispatch(&self, shards: &[ShardId], state: &State) -> Vec<(ShardId, NodeId)> {
+    fn dispatch(
+        &self,
+        query_id: QueryId,
+        shards: &[ShardId],
+        state: &State,
+    ) -> Vec<(ShardId, NodeId)> {
         if let Some(load) = &self.load {
-            let machine_weights = load.machine_weights(state);
+            let shard_times = (0..self.num_shards)
+                .map(|shard_id| load.query_time(query_id, ShardId(shard_id)))
+                .collect::<Vec<_>>();
+            let min_time = shard_times.iter().min().copied().unwrap_or(0) as f32;
+            let corrections: Vec<_> = if min_time == 0.0 {
+                std::iter::repeat(1.0).take(self.num_shards).collect()
+            } else {
+                shard_times.iter().map(|&t| t as f32 / min_time).collect()
+            };
+            // let machine_weights = load.machine_weights(state);
             // let queue_lengths = load.queue_lengths(state);
             shards
                 .iter()
@@ -311,13 +325,13 @@ impl Dispatch for ProbabilisticDispatcher {
                         .expect("shard ID out of bounds")
                         .iter()
                         .map(Weight::value)
-                        .zip(&machine_weights)
-                        .map(|(a, b)| a * (1.0 / (b + 1.0)))
+                        .zip(&corrections)
+                        .map(|(a, b)| a / b)
                         .collect::<Vec<_>>();
                     let distr = WeightedAliasIndex::new(weights.clone()).unwrap_or_else(|_| {
                         panic!(
                             "unable to calculate node weight distribution: {:?}\n{:?}",
-                            weights, machine_weights
+                            weights, corrections
                         )
                     });
                     (s, self.select_node_from(&distr))

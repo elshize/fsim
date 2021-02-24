@@ -1,4 +1,4 @@
-use super::{Dispatch, NodeId, ShardId, State};
+use super::{Dispatch, NodeId, QueryId, ShardId, State};
 use crate::{NodeQueue, NodeQueueEntry, NodeThreadPool};
 
 use std::collections::HashSet;
@@ -46,7 +46,7 @@ impl ShortestQueueDispatch {
 }
 
 impl Dispatch for ShortestQueueDispatch {
-    fn dispatch(&self, shards: &[ShardId], state: &State) -> Vec<(ShardId, NodeId)> {
+    fn dispatch(&self, _: QueryId, shards: &[ShardId], state: &State) -> Vec<(ShardId, NodeId)> {
         shards
             .iter()
             .map(|&shard_id| (shard_id, self.select_node(shard_id, &state)))
