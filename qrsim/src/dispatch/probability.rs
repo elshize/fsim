@@ -314,8 +314,8 @@ impl Dispatch for ProbabilisticDispatcher {
             } else {
                 shard_times.iter().map(|&t| t as f32 / min_time).collect()
             };
-            // let machine_weights = load.machine_weights(state);
-            // let queue_lengths = load.queue_lengths(state);
+            let machine_weights = load.machine_weights(state);
+            let queue_lengths = load.queue_lengths(state);
             shards
                 .iter()
                 .map(|&s| {
@@ -325,8 +325,10 @@ impl Dispatch for ProbabilisticDispatcher {
                         .expect("shard ID out of bounds")
                         .iter()
                         .map(Weight::value)
-                        .zip(&corrections)
-                        .map(|(a, b)| a / b)
+                        .zip(&queue_lengths)
+                        .map(|(a, b)| a / (*b as f32 + 1.0))
+                        // .zip(&corrections)
+                        //.map(|(a, b)| a / b)
                         .collect::<Vec<_>>();
                     let distr = WeightedAliasIndex::new(weights.clone()).unwrap_or_else(|_| {
                         panic!(
