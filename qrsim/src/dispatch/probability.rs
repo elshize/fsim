@@ -325,8 +325,8 @@ impl Dispatch for ProbabilisticDispatcher {
                         .expect("shard ID out of bounds")
                         .iter()
                         .map(Weight::value)
-                        .zip(&queue_lengths)
-                        .map(|(a, b)| a / (*b as f32 + 1.0))
+                        .zip(&machine_weights)
+                        .map(|(a, b)| a / (*b + 1.0))
                         // .zip(&corrections)
                         //.map(|(a, b)| a / b)
                         .collect::<Vec<_>>();
