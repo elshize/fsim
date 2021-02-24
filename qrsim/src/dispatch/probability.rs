@@ -300,8 +300,8 @@ impl ProbabilisticDispatcher {
 impl Dispatch for ProbabilisticDispatcher {
     fn dispatch(&self, shards: &[ShardId], state: &State) -> Vec<(ShardId, NodeId)> {
         if let Some(load) = &self.load {
-            // let machine_weights = load.machine_weights(state);
-            let queue_lengths = load.queue_lengths(state);
+            let machine_weights = load.machine_weights(state);
+            // let queue_lengths = load.queue_lengths(state);
             shards
                 .iter()
                 .map(|&s| {
@@ -311,13 +311,13 @@ impl Dispatch for ProbabilisticDispatcher {
                         .expect("shard ID out of bounds")
                         .iter()
                         .map(Weight::value)
-                        .zip(&queue_lengths)
-                        .map(|(a, b)| a * (1.0 / (*b as f32 + 1.0)))
+                        .zip(&machine_weights)
+                        .map(|(a, b)| a * (1.0 / (b + 1.0)))
                         .collect::<Vec<_>>();
                     let distr = WeightedAliasIndex::new(weights.clone()).unwrap_or_else(|_| {
                         panic!(
                             "unable to calculate node weight distribution: {:?}\n{:?}",
-                            weights, queue_lengths
+                            weights, machine_weights
                         )
                     });
                     (s, self.select_node_from(&distr))
