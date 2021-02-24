@@ -165,6 +165,9 @@ pub struct SimulationConfig {
 
     /// List of nodes that are disabled during this simulation.
     pub disabled_nodes: Vec<NodeId>,
+
+    /// Run selective search, selecting this many shards for each query.k
+    pub selective: Option<usize>,
 }
 
 /// Metadata object containing file paths for [`CachedQueries`].
@@ -694,6 +697,7 @@ impl SimulationConfig {
             dispatcher: RefCell::new(dispatcher),
             query_log_id,
             responses: responses_key,
+            selective: self.selective,
         });
 
         pb.set_length(query_events.len() as u64);

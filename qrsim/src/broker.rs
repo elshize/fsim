@@ -4,6 +4,7 @@ use crate::{
 };
 
 use std::cell::RefCell;
+use std::cmp::Reverse;
 use std::collections::{hash_map::Entry, HashMap};
 use std::rc::Rc;
 use std::time::Duration;
@@ -84,6 +85,7 @@ pub struct Broker {
     pub query_log_id: Key<QueryLog>,
     // /// Function calculating the priority of a node request.
     // pub priority: Box<dyn Fn(&Query, &NodeRequest) -> u64>,
+    pub selective: Option<usize>,
 }
 
 impl Component for Broker {
@@ -178,15 +180,32 @@ impl Broker {
         };
         log::debug!("Broker picked up request: {:?}", request);
         let query = &self.queries[usize::from(request.query_id)];
-        let selection_time = Duration::from_micros(query.selection_time);
-        let shards: Vec<ShardId> = query.selected_shards.clone().unwrap_or_else(|| {
-            (0..self.dispatcher.borrow().num_shards())
+        let (selection_time, shards) = if let Some(top) = self.selective {
+            let selection_time = Duration::from_micros(query.selection_time);
+            let mut scored_shards = query
+                .shard_scores
+                .as_ref()
+                .expect("shard scores needed for selective search")
+                .iter()
+                .enumerate()
+                .map(|(shard_id, &score)| Reverse((ordered_float::OrderedFloat(score), shard_id)))
+                .collect::<Vec<_>>();
+            scored_shards.select_nth_unstable(top);
+            (
+                selection_time,
+                scored_shards
+                    .into_iter()
+                    .map(|Reverse((_, id))| ShardId(id))
+                    .collect(),
+            )
+        } else {
+            let shards: Vec<ShardId> = (0..self.dispatcher.borrow().num_shards())
                 .map(ShardId::from)
-                .collect()
-        });
+                .collect();
+            (Duration::default(), shards)
+        };
         scheduler.schedule(
-            Duration::default(),
-            //selection_time,
+            selection_time,
             self_id,
             Event::Dispatch {
                 request: BrokerRequest::new(request, scheduler.time()),

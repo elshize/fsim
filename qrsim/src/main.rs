@@ -114,6 +114,7 @@ impl TryFrom<Opt> for SimulationConfig {
             dispatcher: opt.dispatcher,
             disabled_nodes: opt.disabled_nodes,
             queue_type: opt.queue_type,
+            selective: None,
         })
     }
 }

@@ -39,6 +39,7 @@ optimization = { path = "../optimization" }
 thiserror = "1"
 parquet = "3"
 parquet_derive = "3"
+ordered-float = "2"
 
 [dev-dependencies]
 float-cmp = "0.8"
