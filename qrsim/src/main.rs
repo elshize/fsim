@@ -115,6 +115,7 @@ impl TryFrom<Opt> for SimulationConfig {
             disabled_nodes: opt.disabled_nodes,
             queue_type: opt.queue_type,
             selective: None,
+            shard_probabilities: None,
         })
     }
 }

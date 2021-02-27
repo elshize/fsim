@@ -374,7 +374,7 @@ impl Dispatch for ProbabilisticDispatcher {
             .wrap_err(msg)
             .unwrap_or_else(|e| {
                 log::error!("{:#}", e);
-                panic!(msg);
+                panic!("{}", msg);
             })
     }
 }

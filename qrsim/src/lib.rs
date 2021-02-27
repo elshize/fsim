@@ -53,6 +53,7 @@ pub use dispatch::Dispatch;
 mod simulation;
 pub use simulation::{
     DispatcherOption, EstimatesConfig, QueueType, SimulationConfig, SimulationLabel,
+    CachedQueries, CacheMetadata
 };
 
 /// See [`TimedEvent`].

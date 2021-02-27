@@ -138,6 +138,9 @@ pub struct SimulationConfig {
     /// Path to the global query time estimates.
     pub estimates: Option<EstimatesConfig>,
 
+    /// Path to the shard probabilities (useful for selective search).
+    pub shard_probabilities: Option<PathBuf>,
+
     /// Path to the output file with query data.
     pub query_output: PathBuf,
 
@@ -227,13 +230,13 @@ impl CacheMetadata {
 ///
 /// The cache is stored in the [Bincode](https://github.com/servo/bincode) format.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
-struct CachedQueries {
-    meta: CacheMetadata,
-    queries: Vec<Query>,
+pub struct CachedQueries {
+    pub meta: CacheMetadata,
+    pub queries: Vec<Query>,
 }
 
 #[derive(Debug, thiserror::Error)]
-enum CacheLoadError {
+pub enum CacheLoadError {
     #[error("query cache not found")]
     CacheNotFound,
     #[error("Cache file found but it is older than the query input file.")]
