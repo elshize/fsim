@@ -346,11 +346,11 @@ impl Dispatch for ProbabilisticDispatcher {
                     weights.sort_by_key(|(_, w)| ordered_float::OrderedFloat(*w));
                     let min = weights.first().map(|(_, w)| *w).unwrap_or(0.0);
                     let max = weights.last().map(|(_, w)| *w).unwrap_or(0.0);
-                    // if max - min > 0.25 {
-                    //     (s, NodeId(weights[0].0))
-                    // } else {
-                    (s, self.select_node(s))
-                    // }
+                    if max - min > 0.5 {
+                        (s, NodeId(weights[0].0))
+                    } else {
+                        (s, self.select_node(s))
+                    }
 
                     // let node = self.select_node(s);
                     // let current_estimate = load.query_time(query_id, s);
