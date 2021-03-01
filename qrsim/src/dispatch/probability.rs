@@ -334,7 +334,7 @@ impl Dispatch for ProbabilisticDispatcher {
                         // .zip(&queue_lengths)
                         // .map(|(a, b)| a / (5.0 * *b as f32 + 1.0))
                         .zip(&queue_lengths)
-                        .map(|(a, b)| 1.0 / (*b as f32 + 1.0))
+                        .map(|(a, b)| a / (*b as f32 + 1.0))
                         // .zip(&corrections)
                         // .map(|(a, b)| a / b)
                         .collect::<Vec<_>>();
