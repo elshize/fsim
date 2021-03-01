@@ -325,20 +325,29 @@ impl Dispatch for ProbabilisticDispatcher {
             //     .max_by_key(|f| ordered_float::OrderedFloat(**f))
             //     .unwrap();
             // let queue_lengths = load.queue_lengths(state);
+            let machine_weights = load.machine_weights(state);
+            // .into_iter()
+            // .copied()
+            // .enumerate()
+            // .collect::<Vec<_>>();
             shards
                 .iter()
                 .map(|&s| {
-                    let mut machine_weights = load
-                        .machine_weights(state)
-                        .into_iter()
-                        .copied()
+                    let mut weights = self
+                        .weights
+                        .get(s.0)
+                        .expect("shard ID out of bounds")
+                        .iter()
+                        .map(Weight::value)
+                        .zip(&machine_weights)
                         .enumerate()
+                        .filter_map(|(n, (w, mw))| if w > 0.0 { Some((n, *mw)) } else { None })
                         .collect::<Vec<_>>();
-                    machine_weights.sort_by_key(|(_, w)| ordered_float::OrderedFloat(*w));
-                    let min = machine_weights.first().map(|(_, w)| *w).unwrap_or(0.0);
-                    let max = machine_weights.last().map(|(_, w)| *w).unwrap_or(0.0);
+                    weights.sort_by_key(|(_, w)| ordered_float::OrderedFloat(*w));
+                    let min = weights.first().map(|(_, w)| *w).unwrap_or(0.0);
+                    let max = weights.last().map(|(_, w)| *w).unwrap_or(0.0);
                     if max - min > 0.25 {
-                        (s, NodeId(machine_weights[0].0))
+                        (s, NodeId(weights[0].0))
                     } else {
                         (s, self.select_node(s))
                     }
