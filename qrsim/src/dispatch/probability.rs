@@ -99,6 +99,10 @@ impl Load {
     }
 
     fn machine_weights(&self, state: &State) -> Array1<f32> {
+        self.machine_weights_with(state, NodeId::from(0), 0)
+    }
+
+    fn machine_weights_with(&self, state: &State, node: NodeId, time: u64) -> Array1<f32> {
         let running = self.thread_pools.iter().map(|pool| {
             state
                 .get(*pool)
@@ -115,7 +119,8 @@ impl Load {
                 .map(|msg| self.query_time(msg.request.query_id(), msg.request.shard_id()))
                 .sum::<u64>()
         });
-        let weights: Array1<f32> = running.zip(waiting).map(|(r, w)| (r + w) as f32).collect();
+        let mut weights: Array1<f32> = running.zip(waiting).map(|(r, w)| (r + w) as f32).collect();
+        weights[node.0] += time as f32;
         let weight_sum = weights.sum();
         if weight_sum == 0.0 {
             weights
@@ -305,46 +310,83 @@ impl Dispatch for ProbabilisticDispatcher {
         state: &State,
     ) -> Vec<(ShardId, NodeId)> {
         if let Some(load) = &self.load {
-            let shard_times = (0..self.num_shards)
-                .map(|shard_id| load.query_time(query_id, ShardId(shard_id)))
-                .collect::<Vec<_>>();
-            let min_time = shard_times.iter().min().copied().unwrap_or(0) as f32;
-            let corrections: Vec<_> = if min_time == 0.0 {
-                std::iter::repeat(1.0).take(self.num_shards).collect()
-            } else {
-                shard_times.iter().map(|&t| t as f32 / min_time).collect()
-            };
-            let machine_weights = load.machine_weights(state);
-            let max_machine_weight = *machine_weights
-                .iter()
-                .max_by_key(|f| ordered_float::OrderedFloat(**f))
-                .unwrap();
-            let queue_lengths = load.queue_lengths(state);
+            // let shard_times = (0..self.num_shards)
+            //     .map(|shard_id| load.query_time(query_id, ShardId(shard_id)))
+            //     .collect::<Vec<_>>();
+            // let min_time = shard_times.iter().min().copied().unwrap_or(0) as f32;
+            // let corrections: Vec<_> = if min_time == 0.0 {
+            //     std::iter::repeat(1.0).take(self.num_shards).collect()
+            // } else {
+            //     shard_times.iter().map(|&t| t as f32 / min_time).collect()
+            // };
+            // let mut machine_weights = load.machine_weights(state);
+            // let max_machine_weight = *machine_weights
+            //     .iter()
+            //     .max_by_key(|f| ordered_float::OrderedFloat(**f))
+            //     .unwrap();
+            // let queue_lengths = load.queue_lengths(state);
             shards
                 .iter()
                 .map(|&s| {
-                    let weights = self
-                        .weights
-                        .get(s.0)
-                        .expect("shard ID out of bounds")
-                        .iter()
-                        .map(Weight::value)
-                        // .zip(&machine_weights)
-                        // .map(|(a, b)| max_machine_weight - *b + 1.0)
-                        // .zip(&queue_lengths)
-                        // .map(|(a, b)| a / (5.0 * *b as f32 + 1.0))
-                        .zip(&queue_lengths)
-                        .map(|(a, b)| a / (*b as f32 + 1.0))
-                        // .zip(&corrections)
-                        // .map(|(a, b)| a / b)
+                    let mut machine_weights = load
+                        .machine_weights(state)
+                        .into_iter()
+                        .copied()
+                        .enumerate()
                         .collect::<Vec<_>>();
-                    let distr = WeightedAliasIndex::new(weights.clone()).unwrap_or_else(|_| {
-                        panic!(
-                            "unable to calculate node weight distribution: {:?}\n{:?}",
-                            weights, corrections
-                        )
-                    });
-                    (s, self.select_node_from(&distr))
+                    machine_weights.sort_by_key(|(_, w)| ordered_float::OrderedFloat(*w));
+                    let min = machine_weights.first().map(|(_, w)| *w).unwrap_or(0.0);
+                    let max = machine_weights.last().map(|(_, w)| *w).unwrap_or(0.0);
+                    if max - min > 0.25 {
+                        (s, NodeId(machine_weights[0].0))
+                    } else {
+                        (s, self.select_node(s))
+                    }
+
+                    // let node = self.select_node(s);
+                    // let current_estimate = load.query_time(query_id, s);
+                    // let machine_weights = load.machine_weights_with(state, node, current_estimate);
+                    // let mut weights = self
+                    //     .weights
+                    //     .get(s.0)
+                    //     .expect("shard ID out of bounds")
+                    //     .iter()
+                    //     .map(Weight::value)
+                    //     .zip(&machine_weights)
+                    //     .enumerate()
+                    //     .filter_map(|(n, (w, mw))| if w > 0.0 { Some((n, *mw)) } else { None })
+                    //     .collect::<Vec<_>>();
+                    // weights.sort_by_key(|(n, w)| ordered_float::OrderedFloat(*w));
+                    // let min = weights.first().map(|(_, w)| *w).unwrap_or(0.0);
+                    // let max = weights.last().map(|(_, w)| *w).unwrap_or(0.0);
+                    // if max - min > 0.25 {
+                    //     (s, weights.iter().min().map(|()|).unwrap())
+                    // } else {
+                    //     (s, self.select_node())
+                    // }
+
+                    //let weights = self
+                    //    .weights
+                    //    .get(s.0)
+                    //    .expect("shard ID out of bounds")
+                    //    .iter()
+                    //    .map(Weight::value)
+                    //    // .zip(&machine_weights)
+                    //    // .map(|(a, b)| max_machine_weight - *b + 1.0)
+                    //    // .zip(&queue_lengths)
+                    //    // .map(|(a, b)| a / (5.0 * *b as f32 + 1.0))
+                    //    .zip(&queue_lengths)
+                    //    .map(|(a, b)| a / (*b as f32 + 1.0))
+                    //    // .zip(&corrections)
+                    //    // .map(|(a, b)| a / b)
+                    //    .collect::<Vec<_>>();
+                    //let distr = WeightedAliasIndex::new(weights.clone()).unwrap_or_else(|_| {
+                    //    panic!(
+                    //        "unable to calculate node weight distribution: {:?}\n{:?}",
+                    //        weights, corrections
+                    //    )
+                    //});
+                    // (s, self.select_node_from(&distr))
                 })
                 .collect()
         } else {
