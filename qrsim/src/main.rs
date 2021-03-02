@@ -116,6 +116,7 @@ impl TryFrom<Opt> for SimulationConfig {
             queue_type: opt.queue_type,
             selective: None,
             shard_probabilities: None,
+            dispatch_overhead: std::time::Duration::default(),
         })
     }
 }

@@ -85,7 +85,10 @@ pub struct Broker {
     pub query_log_id: Key<QueryLog>,
     // /// Function calculating the priority of a node request.
     // pub priority: Box<dyn Fn(&Query, &NodeRequest) -> u64>,
+    /// Only dispatch to this many top ranked shards.
     pub selective: Option<usize>,
+    /// Dispatch overhead.
+    pub dispatch_overhead: Duration,
 }
 
 impl Component for Broker {
@@ -252,7 +255,6 @@ impl Broker {
         let shards = state
             .remove(shards)
             .expect("Dispatcher cannot find selected shards/replicas");
-        let dispatch_overhead = Duration::from_micros(0);
         let mut response_status = ResponseStatus::new(shards.len());
         let query_id = request.query_id();
         let request = Rc::new(request);
@@ -262,7 +264,7 @@ impl Broker {
             let entry = NodeQueueEntry::new(request.clone(), self_id);
             if state.send(queue, entry).is_ok() {
                 scheduler.schedule(
-                    dispatch_overhead,
+                    self.dispatch_overhead,
                     self.node_ids[usize::from(node_id)],
                     super::node::Event::NewRequest,
                 );
@@ -273,7 +275,7 @@ impl Broker {
             }
         }
         self.insert_response_status(state, request.request_id(), response_status);
-        scheduler.schedule(dispatch_overhead, self_id, Event::Idle);
+        scheduler.schedule(self.dispatch_overhead, self_id, Event::Idle);
     }
 
     fn process_response(

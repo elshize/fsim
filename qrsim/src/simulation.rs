@@ -171,6 +171,9 @@ pub struct SimulationConfig {
 
     /// Run selective search, selecting this many shards for each query.
     pub selective: Option<usize>,
+
+    /// Dispatch overhead.
+    pub dispatch_overhead: Duration,
 }
 
 /// Metadata object containing file paths for [`CachedQueries`].
@@ -725,6 +728,7 @@ impl SimulationConfig {
             query_log_id,
             responses: responses_key,
             selective: self.selective,
+            dispatch_overhead: self.dispatch_overhead,
         });
 
         pb.set_length(query_events.len() as u64);
