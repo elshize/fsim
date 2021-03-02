@@ -17,7 +17,7 @@ use std::time::Duration;
 use eyre::{eyre, WrapErr};
 use indicatif::{ProgressBar, ProgressStyle};
 use itertools::Itertools;
-use ndarray::Array2;
+use ndarray::{Array1, Array2};
 use serde::{Deserialize, Serialize};
 use simrs::{ComponentId, Fifo, Key, QueueId, Simulation};
 
@@ -169,7 +169,7 @@ pub struct SimulationConfig {
     /// List of nodes that are disabled during this simulation.
     pub disabled_nodes: Vec<NodeId>,
 
-    /// Run selective search, selecting this many shards for each query.k
+    /// Run selective search, selecting this many shards for each query.
     pub selective: Option<usize>,
 }
 
@@ -441,6 +441,13 @@ impl SimulationConfig {
         })
     }
 
+    fn shard_probabilities(&self) -> eyre::Result<Option<Vec<f32>>> {
+        self.shard_probabilities
+            .as_ref()
+            .map(|path| Ok(serde_json::from_reader(File::open(path)?)?))
+            .transpose()
+    }
+
     fn estimates(&self, _queries: &[Query]) -> eyre::Result<Option<Vec<QueryEstimate>>> {
         if let Some(estimates) = &self.estimates {
             match estimates {
@@ -538,7 +545,10 @@ impl SimulationConfig {
             .collect()
     }
 
-    fn optimized_probabilistic_dispatcher(&self) -> eyre::Result<ProbabilisticDispatcher> {
+    fn optimized_probabilistic_dispatcher(
+        &self,
+        shard_probabilities: Option<Vec<f32>>,
+    ) -> eyre::Result<ProbabilisticDispatcher> {
         let weights = Array2::from_shape_vec(
             (self.num_nodes, self.num_shards),
             self.assignment
@@ -549,11 +559,21 @@ impl SimulationConfig {
                 .collect_vec(),
         )
         .wrap_err("invavlid nodes config")?;
+        let weights = if let Some(probs) = shard_probabilities {
+            weights.dot(&Array2::from_diag(&Array1::from(probs)))
+        } else {
+            weights
+        };
         Ok(ProbabilisticDispatcher::adaptive(weights)?)
     }
 
-    fn boxed_optimized_probabilistic_dispatcher(&self) -> eyre::Result<Box<dyn Dispatch>> {
-        Ok(Box::new(self.optimized_probabilistic_dispatcher()?))
+    fn boxed_optimized_probabilistic_dispatcher(
+        &self,
+        shard_probabilities: Option<Vec<f32>>,
+    ) -> eyre::Result<Box<dyn Dispatch>> {
+        Ok(Box::new(
+            self.optimized_probabilistic_dispatcher(shard_probabilities)?,
+        ))
     }
 
     #[allow(clippy::cast_precision_loss)]
@@ -589,21 +609,23 @@ impl SimulationConfig {
         queries: &Rc<Vec<Query>>,
         estimates: Option<&Rc<Vec<QueryEstimate>>>,
         thread_pools: &[Key<NodeThreadPool>],
+        shard_probabilities: Option<Vec<f32>>,
     ) -> eyre::Result<Box<dyn Dispatch>> {
         let error_msg = || eyre::eyre!("least loaded dispatch needs estimates");
         match self.dispatcher {
             DispatcherOption::RoundRobin => {
                 Ok(Box::new(RoundRobinDispatcher::new(&self.assignment.nodes)))
             }
-            DispatcherOption::Probabilistic => self.boxed_optimized_probabilistic_dispatcher(),
+            DispatcherOption::Probabilistic => {
+                self.boxed_optimized_probabilistic_dispatcher(shard_probabilities)
+            }
             DispatcherOption::UltraOptimized => Ok(Box::new(
-                self.optimized_probabilistic_dispatcher()?.with_load_info(
-                    crate::dispatch::probability::Load {
+                self.optimized_probabilistic_dispatcher(shard_probabilities)?
+                    .with_load_info(crate::dispatch::probability::Load {
                         queues: Vec::from(node_queues),
                         estimates: Rc::clone(estimates.ok_or_else(error_msg)?),
                         thread_pools: Vec::from(thread_pools),
-                    },
-                ),
+                    }),
             )),
             DispatcherOption::Uniform => self.uniform_probabilistic_dispatcher(),
             DispatcherOption::ShortestQueue => Ok(Box::new(ShortestQueueDispatch::new(
@@ -624,7 +646,7 @@ impl SimulationConfig {
                 Rc::clone(estimates.ok_or_else(error_msg)?),
                 Rc::clone(queries),
                 Vec::from(thread_pools),
-                self.optimized_probabilistic_dispatcher()?,
+                self.optimized_probabilistic_dispatcher(shard_probabilities)?,
                 0.875,
             ))),
         }
@@ -658,6 +680,7 @@ impl SimulationConfig {
 
         let queries = Rc::new(self.queries(&pb)?.queries);
         let estimates = self.estimates(queries.as_ref())?.map(Rc::new);
+        let shard_probabilities = self.shard_probabilities()?;
         let query_events = read_query_events(&self.query_events_path)?;
 
         let node_incoming_queues: Vec<_> = (0..self.num_nodes)
@@ -686,6 +709,7 @@ impl SimulationConfig {
             &queries,
             estimates.as_ref(),
             &thread_pools,
+            shard_probabilities,
         )?;
         for &node_id in &self.disabled_nodes {
             dispatcher.disable_node(node_id)?;
