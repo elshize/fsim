@@ -198,6 +198,7 @@ impl Broker {
                 selection_time,
                 scored_shards
                     .into_iter()
+                    .take(top)
                     .map(|Reverse((_, id))| ShardId(id))
                     .collect(),
             )
