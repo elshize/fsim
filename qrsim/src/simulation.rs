@@ -328,10 +328,16 @@ impl CachedQueries {
     }
 }
 
-fn select_function(queue_type: QueueType, queries: Rc<Vec<Query>>) -> BoxedSelect<NodeQueueEntry> {
+fn select_function(
+    queue_type: QueueType,
+    queries: Rc<Vec<Query>>,
+    estimates: Option<&Rc<Vec<QueryEstimate>>>,
+) -> BoxedSelect<NodeQueueEntry> {
     match queue_type {
         QueueType::Fifo => Box::new(FifoSelect::default()),
-        QueueType::Priority => Box::new(CostSelect::new(queries)),
+        QueueType::Priority => Box::new(CostSelect::new(Rc::clone(
+            estimates.expect("for priority queues, you must provide estimates"),
+        ))),
         QueueType::Weighted => Box::new(WeightedSelect::new(queries)),
     }
 }
@@ -703,6 +709,7 @@ impl SimulationConfig {
                 sim.add_queue(NodeQueue::unbounded(select_function(
                     self.queue_type,
                     Rc::clone(&queries),
+                    estimates.as_ref(),
                 )))
             })
             .collect();
