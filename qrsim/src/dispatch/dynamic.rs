@@ -7,15 +7,16 @@ use std::rc::Rc;
 use simrs::{Key, QueueId};
 
 /// Always selects the node with the least load waiting in the queue.
-pub struct LeastLoadedDispatch {
+pub struct DynamicDispatch {
     node_queues: Vec<QueueId<NodeQueue<NodeQueueEntry>>>,
     shards: Vec<Vec<NodeId>>,
     disabled_nodes: HashSet<NodeId>,
     estimates: Rc<Vec<QueryEstimate>>,
     thread_pools: Vec<Key<NodeThreadPool>>,
+    clock: simrs::ClockRef,
 }
 
-impl LeastLoadedDispatch {
+impl DynamicDispatch {
     /// Constructs a new dispatcher.
     #[must_use]
     pub fn new(
@@ -24,6 +25,7 @@ impl LeastLoadedDispatch {
         estimates: Rc<Vec<QueryEstimate>>,
         queries: Rc<Vec<Query>>,
         thread_pools: Vec<Key<NodeThreadPool>>,
+        clock: simrs::ClockRef,
     ) -> Self {
         Self {
             shards: super::invert_nodes_to_shards(nodes),
@@ -31,6 +33,7 @@ impl LeastLoadedDispatch {
             node_queues,
             estimates,
             thread_pools,
+            clock,
         }
     }
 
@@ -56,7 +59,13 @@ impl LeastLoadedDispatch {
                     .expect("unknown thread pool ID")
                     .running_threads()
                     .iter()
-                    .map(|t| t.estimated.as_micros())
+                    .map(|t| {
+                        let elapsed = self.clock.time() - t.start;
+                        t.estimated
+                            .as_micros()
+                            .checked_sub(elapsed.as_micros())
+                            .unwrap_or_default()
+                    })
                     .sum::<u128>();
                 let waiting = state
                     .queue(self.node_queues[n.0])
@@ -70,7 +79,7 @@ impl LeastLoadedDispatch {
     }
 }
 
-impl Dispatch for LeastLoadedDispatch {
+impl Dispatch for DynamicDispatch {
     fn dispatch(&self, _: QueryId, shards: &[ShardId], state: &State) -> Vec<(ShardId, NodeId)> {
         shards
             .iter()

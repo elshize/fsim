@@ -1,7 +1,7 @@
 use crate::{
-    run_events, write_from_channel, BoxedSelect, Broker, BrokerQueues, CostSelect, Dispatch, Event,
-    FifoSelect, LeastLoadedDispatch, MessageType, Node, NodeEvent, NodeId, NodeQueue,
-    NodeQueueEntry, NodeResponse, NodeThreadPool, NumCores, OptPlusDispatch,
+    run_events, write_from_channel, BoxedSelect, Broker, BrokerQueues, CostSelect, Dispatch,
+    DynamicDispatch, Event, FifoSelect, LeastLoadedDispatch, MessageType, Node, NodeEvent, NodeId,
+    NodeQueue, NodeQueueEntry, NodeResponse, NodeThreadPool, NumCores, OptPlusDispatch,
     ProbabilisticDispatcher, Query, QueryEstimate, QueryLog, QueryRow, RequestId, ResponseStatus,
     RoundRobinDispatcher, ShortestQueueDispatch, TimedEvent, WeightedSelect,
 };
@@ -52,6 +52,9 @@ pub enum DispatcherOption {
 
     /// See [`OptPlusDispatch`].
     OptPlus,
+
+    /// See [`DynamicDispatch`].
+    Dynamic,
 }
 
 /// Type of queue for incoming shard requests in nodes.
@@ -613,6 +616,7 @@ impl SimulationConfig {
         estimates: Option<&Rc<Vec<QueryEstimate>>>,
         thread_pools: &[Key<NodeThreadPool>],
         shard_probabilities: Option<Vec<f32>>,
+        clock: simrs::ClockRef,
     ) -> eyre::Result<Box<dyn Dispatch>> {
         let error_msg = || eyre::eyre!("least loaded dispatch needs estimates");
         match self.dispatcher {
@@ -651,6 +655,14 @@ impl SimulationConfig {
                 Vec::from(thread_pools),
                 self.optimized_probabilistic_dispatcher(shard_probabilities)?,
                 0.875,
+            ))),
+            DispatcherOption::Dynamic => Ok(Box::new(DynamicDispatch::new(
+                &self.assignment.nodes,
+                Vec::from(node_queues),
+                Rc::clone(estimates.ok_or_else(error_msg)?),
+                Rc::clone(queries),
+                Vec::from(thread_pools),
+                clock,
             ))),
         }
     }
@@ -713,6 +725,7 @@ impl SimulationConfig {
             estimates.as_ref(),
             &thread_pools,
             shard_probabilities,
+            sim.scheduler.clock(),
         )?;
         for &node_id in &self.disabled_nodes {
             dispatcher.disable_node(node_id)?;

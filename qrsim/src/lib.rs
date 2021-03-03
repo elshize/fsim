@@ -43,6 +43,7 @@ pub use query_log::{write_from_channel, QueryLog};
 
 mod dispatch;
 pub use dispatch::dummy::DummyDispatcher;
+pub use dispatch::dynamic::DynamicDispatch;
 pub use dispatch::least_loaded::LeastLoadedDispatch;
 pub use dispatch::opt_plus::OptPlusDispatch;
 pub use dispatch::probability::ProbabilisticDispatcher;
@@ -52,8 +53,8 @@ pub use dispatch::Dispatch;
 
 mod simulation;
 pub use simulation::{
-    DispatcherOption, EstimatesConfig, QueueType, SimulationConfig, SimulationLabel,
-    CachedQueries, CacheMetadata
+    CacheMetadata, CachedQueries, DispatcherOption, EstimatesConfig, QueueType, SimulationConfig,
+    SimulationLabel,
 };
 
 /// See [`TimedEvent`].
