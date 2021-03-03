@@ -624,6 +624,7 @@ impl SimulationConfig {
         shard_probabilities: Option<Vec<f32>>,
         clock: simrs::ClockRef,
     ) -> eyre::Result<Box<dyn Dispatch>> {
+        use rand_chacha::rand_core::SeedableRng;
         let error_msg = || eyre::eyre!("least loaded dispatch needs estimates");
         match self.dispatcher {
             DispatcherOption::RoundRobin => {
@@ -669,6 +670,7 @@ impl SimulationConfig {
                 Rc::clone(queries),
                 Vec::from(thread_pools),
                 clock,
+                RefCell::new(rand_chacha::ChaChaRng::from_entropy()),
             ))),
         }
     }

@@ -1,9 +1,11 @@
 use super::{Dispatch, NodeId, ShardId, State};
 use crate::{NodeQueue, NodeQueueEntry, NodeThreadPool, Query, QueryEstimate, QueryId};
 
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
 
+use rand_chacha::ChaChaRng;
 use simrs::{Key, QueueId};
 
 /// Always selects the node with the least load waiting in the queue.
@@ -14,6 +16,7 @@ pub struct DynamicDispatch {
     estimates: Rc<Vec<QueryEstimate>>,
     thread_pools: Vec<Key<NodeThreadPool>>,
     clock: simrs::ClockRef,
+    rng: RefCell<ChaChaRng>,
 }
 
 impl DynamicDispatch {
@@ -26,6 +29,7 @@ impl DynamicDispatch {
         queries: Rc<Vec<Query>>,
         thread_pools: Vec<Key<NodeThreadPool>>,
         clock: simrs::ClockRef,
+        rng: RefCell<ChaChaRng>,
     ) -> Self {
         Self {
             shards: super::invert_nodes_to_shards(nodes),
@@ -34,6 +38,7 @@ impl DynamicDispatch {
             estimates,
             thread_pools,
             clock,
+            rng,
         }
     }
 
@@ -49,7 +54,7 @@ impl DynamicDispatch {
     }
 
     #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
-    fn select_node(&self, shard_id: ShardId, state: &State) -> NodeId {
+    fn _select_node(&self, shard_id: ShardId, state: &State) -> NodeId {
         *self.shards[shard_id.0]
             .iter()
             .filter(|n| !self.disabled_nodes.contains(n))
@@ -76,6 +81,40 @@ impl DynamicDispatch {
                 running as u64 + waiting
             })
             .unwrap()
+    }
+
+    #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
+    fn select_node(&self, shard_id: ShardId, state: &State) -> NodeId {
+        use rand_distr::Distribution;
+        let weights: Vec<_> = self.shards[shard_id.0]
+            .iter()
+            .filter(|n| !self.disabled_nodes.contains(n))
+            .map(|n| {
+                let running = state
+                    .get(self.thread_pools[n.0])
+                    .expect("unknown thread pool ID")
+                    .running_threads()
+                    .iter()
+                    .map(|t| {
+                        let elapsed = self.clock.time() - t.start;
+                        t.estimated
+                            .as_micros()
+                            .checked_sub(elapsed.as_micros())
+                            .unwrap_or_default()
+                    })
+                    .sum::<u128>();
+                let waiting = state
+                    .queue(self.node_queues[n.0])
+                    .iter()
+                    .map(|msg| self.query_time(msg.request.query_id(), msg.request.shard_id()))
+                    .sum::<u64>();
+                //waiting
+                1.0 / (running as f64 + waiting as f64 + 1.0)
+            })
+            .collect();
+        let distr = rand_distr::WeightedAliasIndex::new(weights).unwrap();
+        let mut rng = self.rng.borrow_mut();
+        NodeId(distr.sample(&mut *rng))
     }
 }
 
