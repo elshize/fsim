@@ -909,14 +909,15 @@ impl<T: node::GetNodeRequest> Select for FifoSelect<T> {
 
 /// Priority of a node request that always prefers the requests estimated to be shorter.
 pub struct CostSelect<T> {
-    queries: Rc<Vec<Query>>,
+    //queries: Rc<Vec<Query>>,
+    estimates: Rc<Vec<QueryEstimate>>,
     phantom: PhantomData<T>,
 }
 
 impl<T> CostSelect<T> {
-    fn new(queries: Rc<Vec<Query>>) -> Self {
+    fn new(estimates: Rc<Vec<QueryEstimate>>) -> Self {
         Self {
-            queries,
+            estimates,
             phantom: PhantomData,
         }
     }
@@ -929,8 +930,9 @@ impl<T: node::GetNodeRequest> Select for CostSelect<T> {
     fn select(&self, elements: &[T]) -> Option<usize> {
         select_by_priority(elements, |entry: &T| {
             let request = entry.node_request();
-            let query: &Query = &self.queries[usize::from(request.query_id())];
-            -(query.retrieval_times[usize::from(request.shard_id())] as i64)
+            let estimate =
+                self.estimates[usize::from(request.query_id())].shard_estimate(request.shard_id());
+            -(estimate as i64)
         })
     }
 }
