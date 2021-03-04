@@ -62,7 +62,6 @@ pub(crate) type BrokerId = simrs::ComponentId<<Broker as simrs::Component>::Even
 
 /// See [`TimedEvent`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "component")]
 #[serde(rename_all = "snake_case")]
 pub enum Event {
     /// Broker-level event.
