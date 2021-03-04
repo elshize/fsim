@@ -1074,8 +1074,37 @@ mod test {
     "event": {
         "component":"node",
         "node_id":7,
+        "event": "suspend"
+    },
+    "time":1
+}"#
+            .chars()
+            .filter(|c| !c.is_ascii_whitespace())
+            .collect::<String>()
+        );
+        assert_eq!(
+            serde_json::from_str::<TimedEvent>(&serde_json::to_string(&event).unwrap()).unwrap(),
+            event
+        );
+    }
+
+    #[test]
+    fn test_deserialize_node_event_injure() {
+        let event = TimedEvent {
+            event: Event::Node {
+                node_id: NodeId::from(7),
+                event: NodeEvent::Injure(0.0),
+            },
+            time: Duration::from_micros(1),
+        };
+        assert_eq!(
+            serde_json::to_string(&event).unwrap(),
+            r#"{
+    "event": {
+        "component":"node",
+        "node_id":7,
         "event": {
-            "type":"suspend"
+            "injure":0.0
         }
     },
     "time":1
@@ -1085,7 +1114,7 @@ mod test {
             .collect::<String>()
         );
         assert_eq!(
-            rmp_serde::from_read_ref::<_, TimedEvent>(&rmp_serde::to_vec(&event).unwrap()).unwrap(),
+            serde_json::from_str::<TimedEvent>(&serde_json::to_string(&event).unwrap()).unwrap(),
             event
         );
     }

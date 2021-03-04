@@ -22,13 +22,6 @@ impl std::str::FromStr for DurationArg {
     }
 }
 
-#[derive(strum::EnumString)]
-#[strum(serialize_all = "lowercase")]
-enum Format {
-    Json,
-    MsgPack,
-}
-
 /// Generates input for distributed search simulation.
 #[derive(Clap)]
 #[clap(version, author)]
@@ -40,10 +33,6 @@ struct Opt {
     /// Seed to use for random number generator.
     #[clap(short, long)]
     seed: Option<u64>,
-
-    /// Output format.
-    #[clap(short, long, possible_values = &["json", "msgpack"], default_value = "msgpack")]
-    format: Format,
 
     #[clap(short)]
     num_nodes: usize,
@@ -133,14 +122,7 @@ fn generate(opt: &Opt) -> Result<()> {
         time += INTERVAL;
     }
     let mut writer = std::fs::File::create(&opt.output_path)?;
-    match opt.format {
-        Format::Json => {
-            serde_json::to_writer(&mut writer, &events)?;
-        }
-        Format::MsgPack => {
-            rmp_serde::encode::write(&mut writer, &events)?;
-        }
-    }
+    serde_json::to_writer(&mut writer, &events)?;
     Ok(())
 }
 
