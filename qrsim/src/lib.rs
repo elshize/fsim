@@ -1119,6 +1119,75 @@ mod test {
         );
     }
 
+    #[test]
+    fn test_deserialize_node_events() {
+        let events = vec![
+            TimedEvent {
+                event: Event::Node {
+                    node_id: NodeId::from(6),
+                    event: NodeEvent::Suspend,
+                },
+                time: Duration::from_micros(1),
+            },
+            TimedEvent {
+                event: Event::Node {
+                    node_id: NodeId::from(7),
+                    event: NodeEvent::Injure(0.0),
+                },
+                time: Duration::from_micros(2),
+            },
+            TimedEvent {
+                event: Event::Node {
+                    node_id: NodeId::from(8),
+                    event: NodeEvent::Cure,
+                },
+                time: Duration::from_micros(3),
+            },
+        ];
+        assert_eq!(
+            serde_json::to_string(&events).unwrap(),
+            r#"[
+{
+    "event": {
+        "component":"node",
+        "node_id":6,
+        "event": "suspend"
+    },
+    "time":1
+},
+{
+    "event": {
+        "component":"node",
+        "node_id":7,
+        "event": {
+            "injure":0.0
+        }
+    },
+    "time":2
+},
+{
+    "event": {
+        "component":"node",
+        "node_id":8,
+        "event": "cure"
+    },
+    "time":3
+}
+]"#
+            .chars()
+            .filter(|c| !c.is_ascii_whitespace())
+            .collect::<String>()
+        );
+        assert_eq!(
+            serde_json::from_str::<Vec<TimedEvent>>(&serde_json::to_string(&events).unwrap())
+                .unwrap(),
+            events
+        );
+        serde_json::from_str::<Vec<TimedEvent>>(
+            &r#"[{"event":{"component":"node","node_id":39,"event":{"injure":0.95}},"time":150000}]"#,
+        ).unwrap();
+    }
+
     pub struct NodeQueueEntryStub {
         node_request: NodeRequest,
     }

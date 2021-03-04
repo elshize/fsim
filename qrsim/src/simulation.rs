@@ -823,9 +823,7 @@ pub fn read_failure_events(file_path: Option<&Path>) -> eyre::Result<Vec<TimedEv
                 file_path.display()
             )
         })?;
-        serde_json::Deserializer::from_reader(file)
-            .into_iter()
-            .collect::<Result<Vec<TimedEvent>, _>>()
+        serde_json::from_reader::<_, Vec<TimedEvent>>(file)
             .map_err(|e| eyre!("unable to parse failure events in JSON format: {}", e))
     } else {
         Ok(vec![])
