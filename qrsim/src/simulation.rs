@@ -830,7 +830,7 @@ pub fn read_failure_events(file_path: Option<&Path>) -> eyre::Result<Vec<TimedEv
                 .wrap_err("unable to parse query events in JSON format")
         } else {
             rmp_serde::from_read::<_, Vec<TimedEvent>>(file)
-                .wrap_err("unable to parse query events in MsgPack format")
+                .map_err(|e| eyre!("unable to parse query events in MsgPack format: {}", e))
         }
     } else {
         Ok(vec![])
