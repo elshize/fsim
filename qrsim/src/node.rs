@@ -21,6 +21,8 @@ pub enum NodeStatus {
 
 /// Node events.
 #[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[serde(tag = "type")]
 pub enum Event {
     /// Node has finished doing work and is ready to pick up the next request.
     Idle,

@@ -62,6 +62,7 @@ pub(crate) type BrokerId = simrs::ComponentId<<Broker as simrs::Component>::Even
 
 /// See [`TimedEvent`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "component")]
 #[serde(rename_all = "snake_case")]
 pub enum Event {
     /// Broker-level event.
@@ -1027,7 +1028,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_deserialize_event() {
+    fn test_deserialize_broker_event() {
         let event = TimedEvent {
             event: Event::Broker(BrokerEvent::NewRequest(QueryRequest::new(
                 RequestId::from(0),
@@ -1045,6 +1046,37 @@ mod test {
         "request_id":0,
         "query_id":2,
         "entry_time":1
+    },
+    "time":1
+}"#
+            .chars()
+            .filter(|c| !c.is_ascii_whitespace())
+            .collect::<String>()
+        );
+        assert_eq!(
+            rmp_serde::from_read_ref::<_, TimedEvent>(&rmp_serde::to_vec(&event).unwrap()).unwrap(),
+            event
+        );
+    }
+
+    #[test]
+    fn test_deserialize_node_event() {
+        let event = TimedEvent {
+            event: Event::Node {
+                node_id: NodeId::from(7),
+                event: NodeEvent::Suspend,
+            },
+            time: Duration::from_micros(1),
+        };
+        assert_eq!(
+            serde_json::to_string(&event).unwrap(),
+            r#"{
+    "event": {
+        "component":"node",
+        "node_id":7,
+        "event": {
+            "type":"suspend"
+        }
     },
     "time":1
 }"#
