@@ -263,33 +263,33 @@ impl ProbabilisticDispatcher {
         F: Fn(&mut Weight) -> bool,
         G: Fn(f32) -> bool,
     {
-        if let Some(weight_matrix) = self.weight_matrix.as_mut() {
-            let node = &mut weight_matrix.nodes[node_id.0];
-            if cond(*node) {
-                *node = 1.0 - *node;
-                let probabilities =
-                    optimization::LpOptimizer.optimize(weight_matrix.weights().view());
-                self.weights = probabilities_to_weights(probabilities.view());
-                self.shards = calc_distributions(&self.weights)?;
-                debug_assert_eq!(self.weights.len(), self.num_shards);
-                debug_assert_eq!(self.shards.len(), self.num_shards);
-                Ok(true)
-            } else {
-                Ok(false)
-            }
-        } else {
-            let num_nodes = self.num_nodes;
-            let changed = self.weights.iter_mut().any(|weights| {
-                debug_assert_eq!(weights.len(), num_nodes);
-                f(&mut weights[node_id.0])
-            });
-            if changed {
-                self.shards = calc_distributions(&self.weights)?;
-                debug_assert_eq!(self.weights.len(), self.num_shards);
-                debug_assert_eq!(self.shards.len(), self.num_shards);
-            }
-            Ok(changed)
+        // if let Some(weight_matrix) = self.weight_matrix.as_mut() {
+        //     let node = &mut weight_matrix.nodes[node_id.0];
+        //     if cond(*node) {
+        //         *node = 1.0 - *node;
+        //         let probabilities =
+        //             optimization::LpOptimizer.optimize(weight_matrix.weights().view());
+        //         self.weights = probabilities_to_weights(probabilities.view());
+        //         self.shards = calc_distributions(&self.weights)?;
+        //         debug_assert_eq!(self.weights.len(), self.num_shards);
+        //         debug_assert_eq!(self.shards.len(), self.num_shards);
+        //         Ok(true)
+        //     } else {
+        //         Ok(false)
+        //     }
+        // } else {
+        let num_nodes = self.num_nodes;
+        let changed = self.weights.iter_mut().any(|weights| {
+            debug_assert_eq!(weights.len(), num_nodes);
+            f(&mut weights[node_id.0])
+        });
+        if changed {
+            self.shards = calc_distributions(&self.weights)?;
+            debug_assert_eq!(self.weights.len(), self.num_shards);
+            debug_assert_eq!(self.shards.len(), self.num_shards);
         }
+        Ok(changed)
+        // }
     }
 
     fn select_node_from(&self, distr: &WeightedAliasIndex<f32>) -> NodeId {
@@ -441,6 +441,7 @@ mod test {
     use super::*;
 
     #[test]
+    #[ignore = "Logic has changed but might come back."]
     fn test_probabilistic_dispatcher() -> Result<()> {
         let weight_matrix = ndarray::arr2(&[[0.5, 0.5, 0.0], [0.0, 0.5, 0.5], [0.5, 0.0, 0.5]]);
         let mut dispatcher = ProbabilisticDispatcher::adaptive(weight_matrix.clone())?;

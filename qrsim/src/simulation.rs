@@ -1,9 +1,10 @@
 use crate::{
-    run_events, write_from_channel, BoxedSelect, Broker, BrokerQueues, CostSelect, Dispatch,
-    DynamicDispatch, Event, FifoSelect, LeastLoadedDispatch, MessageType, Node, NodeEvent, NodeId,
-    NodeQueue, NodeQueueEntry, NodeResponse, NodeThreadPool, NumCores, OptPlusDispatch,
-    ProbabilisticDispatcher, Query, QueryEstimate, QueryLog, QueryRow, RequestId, ResponseStatus,
-    RoundRobinDispatcher, ShortestQueueDispatch, TimedEvent, WeightedSelect,
+    run_events, write_from_channel, BoxedSelect, Broker, BrokerId, BrokerQueues, CostSelect,
+    Dispatch, DynamicDispatch, Event, FifoSelect, LeastLoadedDispatch, MessageType, Node,
+    NodeEvent, NodeId, NodeQueue, NodeQueueEntry, NodeResponse, NodeStatus, NodeThreadPool,
+    NumCores, OptPlusDispatch, ProbabilisticDispatcher, Query, QueryEstimate, QueryLog, QueryRow,
+    RequestId, ResponseStatus, RoundRobinDispatcher, ShortestQueueDispatch, TimedEvent,
+    WeightedSelect,
 };
 
 use std::cell::RefCell;
@@ -526,18 +527,23 @@ impl SimulationConfig {
         outcoming_queue: QueueId<Fifo<NodeResponse>>,
         queries: &Rc<Vec<Query>>,
         thread_pools: &[Key<NodeThreadPool>],
+        node_statuses: &[Key<NodeStatus>],
+        broker_id: Key<Option<BrokerId>>,
     ) -> Vec<NodeComponentId> {
         incoming_queues
             .iter()
             .enumerate()
             .zip(thread_pools)
-            .map(|((id, incoming), &thread_pool)| {
+            .zip(node_statuses)
+            .map(|(((id, incoming), &thread_pool), &node_status)| {
                 simulation.add_component(Node::new(
                     NodeId::from(id),
                     Rc::clone(&queries),
                     *incoming,
                     outcoming_queue,
                     thread_pool,
+                    node_status,
+                    broker_id,
                 ))
             })
             .collect()
@@ -706,6 +712,8 @@ impl SimulationConfig {
         let shard_probabilities = self.shard_probabilities()?;
         let query_events = read_query_events(&self.query_events_path)?;
 
+        let broker_id = sim.state.insert::<Option<BrokerId>>(None);
+
         let node_incoming_queues: Vec<_> = (0..self.num_nodes)
             .map(|_| {
                 sim.add_queue(NodeQueue::unbounded(select_function(
@@ -714,6 +722,9 @@ impl SimulationConfig {
                     estimates.as_ref(),
                 )))
             })
+            .collect();
+        let node_statuses: Vec<_> = (0..self.num_nodes)
+            .map(|_| sim.state.insert(NodeStatus::Healthy))
             .collect();
         let broker_response_queue = sim.add_queue(Fifo::default());
 
@@ -724,6 +735,8 @@ impl SimulationConfig {
             broker_response_queue,
             &queries,
             &thread_pools,
+            &node_statuses,
+            broker_id,
         );
         let responses_key = sim
             .state
@@ -751,6 +764,7 @@ impl SimulationConfig {
             responses: responses_key,
             selective: self.selective,
             dispatch_overhead: self.dispatch_overhead,
+            node_statuses,
         });
 
         pb.set_length(query_events.len() as u64);

@@ -35,7 +35,8 @@ pub use broker::{Broker, BrokerQueues, Event as BrokerEvent, ResponseStatus};
 
 mod node;
 pub use node::{
-    BoxedSelect, Event as NodeEvent, Node, NodeQueue, NodeQueueEntry, NodeThreadPool, Select,
+    BoxedSelect, Event as NodeEvent, Node, NodeQueue, NodeQueueEntry, NodeStatus, NodeThreadPool,
+    Select,
 };
 
 mod query_log;
@@ -57,8 +58,10 @@ pub use simulation::{
     SimulationLabel,
 };
 
+pub(crate) type BrokerId = simrs::ComponentId<<Broker as simrs::Component>::Event>;
+
 /// See [`TimedEvent`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "component")]
 #[serde(rename_all = "snake_case")]
 pub enum Event {
@@ -74,7 +77,7 @@ pub enum Event {
 }
 
 /// Event that can be provided at the input of the simulation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TimedEvent {
     /// Event occurring at `time`.
     pub event: Event,
@@ -381,7 +384,7 @@ impl QueryRequest {
 }
 
 /// A request picked up by the broker.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BrokerRequest {
     #[serde(flatten)]
     query_request: QueryRequest,
@@ -419,7 +422,7 @@ impl BrokerRequest {
 }
 
 /// A request sent to the node.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NodeRequest {
     shard_id: ShardId,
     #[serde(flatten)]

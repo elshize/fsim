@@ -1,4 +1,4 @@
-use crate::{BrokerEvent, NodeId, NodeRequest, NodeResponse, Query, RequestId};
+use crate::{BrokerEvent, BrokerId, NodeId, NodeRequest, NodeResponse, Query, RequestId};
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -6,13 +6,28 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use simrs::{Component, ComponentId, Fifo, Key, Queue, QueueId, Scheduler, State};
 
+const BROKER_NOTIFY_DELAY: Duration = Duration::from_millis(20);
+
+/// The state of a node.
+#[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize)]
+pub enum NodeStatus {
+    /// Node works as expected.
+    Healthy,
+    /// Node is currently working at a fraction of speed.
+    Injured(f32),
+    /// Node is currently unavailable.
+    Unresponsive,
+}
+
 /// Node events.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Event {
     /// Node has finished doing work and is ready to pick up the next request.
     Idle,
+
     /// New request has just arrived at the node's queue.
     NewRequest,
+
     /// Processing of the request passed in the event has finished.
     #[serde(skip)]
     ProcessingFinished {
@@ -23,6 +38,15 @@ pub enum Event {
         /// Where to send the response.
         broker: ComponentId<BrokerEvent>,
     },
+
+    /// Change the status of this node to [`NodeStatus::Unresponsive`].
+    Suspend,
+
+    /// Change the status of this node to [`NodeStatus::Injured`] with the given fraction.
+    Injure(f32),
+
+    /// Change the status of this node to [`NodeStatus::Healthy`].
+    Cure,
 }
 
 /// Implementors of this trait are used to select the next request out of many waiting in a queue.
@@ -102,7 +126,7 @@ pub trait GetNodeRequest {
 
 /// Entry in the node queue containing a priority value, which is used to decide the order of
 /// popping values from the queue.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct NodeQueueEntry {
     /// Request being sent to the node.
     pub request: NodeRequest,
@@ -215,6 +239,8 @@ pub struct Node {
     incoming: QueueId<NodeQueue<NodeQueueEntry>>,
     outgoing: QueueId<Fifo<NodeResponse>>,
     thread_pool: Key<NodeThreadPool>,
+    status: Key<NodeStatus>,
+    broker_id: Key<Option<BrokerId>>,
 }
 
 impl Node {
@@ -226,6 +252,8 @@ impl Node {
         incoming: QueueId<NodeQueue<NodeQueueEntry>>,
         outgoing: QueueId<Fifo<NodeResponse>>,
         thread_pool: Key<NodeThreadPool>,
+        status: Key<NodeStatus>,
+        broker_id: Key<Option<BrokerId>>,
     ) -> Self {
         Self {
             id,
@@ -233,6 +261,8 @@ impl Node {
             incoming,
             outgoing,
             thread_pool,
+            status,
+            broker_id,
         }
     }
 
@@ -256,6 +286,7 @@ impl Component for Node {
         match event {
             Event::Idle | Event::NewRequest => {
                 log::trace!("Node is idle");
+                let status = *state.get(self.status).expect("missing node status");
                 if self.thread_pool(state).request_thread() {
                     if let Some(NodeQueueEntry {
                         request, broker, ..
@@ -266,10 +297,16 @@ impl Component for Node {
                             self.id,
                             request.request_id()
                         );
-                        let time = Duration::from_micros(
-                            self.queries[usize::from(request.query_id()) - 1].retrieval_times
-                                [usize::from(request.shard_id)],
-                        );
+                        let micros = {
+                            let base = self.queries[usize::from(request.query_id()) - 1]
+                                .retrieval_times[usize::from(request.shard_id)];
+                            if let NodeStatus::Injured(f) = status {
+                                (base as f32 * f).round() as u64
+                            } else {
+                                base
+                            }
+                        };
+                        let time = Duration::from_micros(micros);
                         self.thread_pool(state).start_request(
                             request.request_id(),
                             scheduler.time(),
@@ -311,6 +348,61 @@ impl Component for Node {
                 };
                 scheduler.schedule_now(*broker, BrokerEvent::Response);
                 scheduler.schedule_now(self_id, Event::Idle);
+            }
+            Event::Injure(fraction) => {
+                let new_status = NodeStatus::Injured(*fraction);
+                let status = state.get_mut(self.status).expect("missing node status");
+                let old_status = *status;
+                *status = new_status;
+                let broker_id = state
+                    .get(self.broker_id)
+                    .expect("missing broker ID")
+                    .expect("broker ID hasn't been registered");
+                scheduler.schedule(
+                    BROKER_NOTIFY_DELAY,
+                    broker_id,
+                    BrokerEvent::NodeStatusChanged {
+                        node_id: self.id,
+                        new_status,
+                        old_status,
+                    },
+                );
+            }
+            Event::Cure => {
+                let new_status = NodeStatus::Healthy;
+                let status = state.get_mut(self.status).expect("missing node status");
+                let old_status = *status;
+                let broker_id = state
+                    .get(self.broker_id)
+                    .expect("missing broker ID")
+                    .expect("broker ID hasn't been registered");
+                scheduler.schedule(
+                    BROKER_NOTIFY_DELAY,
+                    broker_id,
+                    BrokerEvent::NodeStatusChanged {
+                        node_id: self.id,
+                        new_status,
+                        old_status,
+                    },
+                );
+            }
+            Event::Suspend => {
+                let new_status = NodeStatus::Unresponsive;
+                let status = state.get_mut(self.status).expect("missing node status");
+                let old_status = *status;
+                let broker_id = state
+                    .get(self.broker_id)
+                    .expect("missing broker ID")
+                    .expect("broker ID hasn't been registered");
+                scheduler.schedule(
+                    BROKER_NOTIFY_DELAY,
+                    broker_id,
+                    BrokerEvent::NodeStatusChanged {
+                        node_id: self.id,
+                        new_status,
+                        old_status,
+                    },
+                );
             }
         }
     }

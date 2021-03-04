@@ -1,6 +1,6 @@
 use crate::{
     node, BrokerRequest, Dispatch, NodeId, NodeQueue, NodeQueueEntry, NodeRequest, NodeResponse,
-    Query, QueryLog, QueryRequest, QueryResponse, RequestId, ShardId,
+    NodeStatus, Query, QueryLog, QueryRequest, QueryResponse, RequestId, ShardId,
 };
 
 use std::cell::RefCell;
@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use simrs::{Component, ComponentId, Fifo, Key, QueueId, Scheduler, State};
 
 /// Broker events.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[serde(tag = "type")]
 pub enum Event {
@@ -35,6 +35,13 @@ pub enum Event {
     Response,
     /// Node is no longer available for dispatch.
     DisableNode(NodeId),
+
+    /// Reissue these requests.
+    NodeStatusChanged {
+        node_id: NodeId,
+        old_status: NodeStatus,
+        new_status: NodeStatus,
+    },
 }
 
 /// Information about received and dropped responses to a request.
@@ -73,22 +80,30 @@ pub struct BrokerQueues {
 pub struct Broker {
     /// Incoming/outgoing queues.
     pub queues: BrokerQueues,
+
     /// List of all component IDs for the nodes in the system.
     pub node_ids: Vec<ComponentId<node::Event>>,
+
     /// A reference to the list of all available queries, used to access times.
     pub queries: Rc<Vec<Query>>,
+
     /// The routing policy.
     pub dispatcher: RefCell<Box<dyn Dispatch>>,
+
     /// The key to the map of all responses, used to track when each query is fully processed.
     pub responses: Key<HashMap<RequestId, ResponseStatus>>,
+
     /// The key of the query log for status updates.
     pub query_log_id: Key<QueryLog>,
-    // /// Function calculating the priority of a node request.
-    // pub priority: Box<dyn Fn(&Query, &NodeRequest) -> u64>,
+
     /// Only dispatch to this many top ranked shards.
     pub selective: Option<usize>,
+
     /// Dispatch overhead.
     pub dispatch_overhead: Duration,
+
+    /// List of current statuses of nodes.
+    pub node_statuses: Vec<Key<NodeStatus>>,
 }
 
 impl Component for Broker {
@@ -133,6 +148,53 @@ impl Component for Broker {
                         panic!();
                     });
             }
+            Event::NodeStatusChanged {
+                node_id,
+                old_status,
+                new_status,
+            } => match (old_status, new_status) {
+                (NodeStatus::Healthy, NodeStatus::Unresponsive)
+                | (NodeStatus::Injured(_), NodeStatus::Unresponsive) => {
+                    self.dispatcher
+                        .borrow_mut()
+                        .disable_node(*node_id)
+                        .unwrap_or_else(|err| {
+                            log::error!("{}", err);
+                            panic!();
+                        });
+                    while let Some(request) = state.recv(self.queues.node[node_id.0]) {
+                        let query_id = request.request.query_id();
+                        let shard_id = request.request.shard_id();
+                        let node_id = self
+                            .dispatcher
+                            .borrow()
+                            .dispatch(query_id, &[shard_id], &state)
+                            .first()
+                            .unwrap()
+                            .1;
+                        let queue = self.queues.node[usize::from(node_id)];
+                        if state.send(queue, request).is_ok() {
+                            scheduler.schedule(
+                                self.dispatch_overhead,
+                                self.node_ids[usize::from(node_id)],
+                                super::node::Event::NewRequest,
+                            );
+                        } else {
+                            todo!("")
+                        }
+                    }
+                }
+                (NodeStatus::Unresponsive, NodeStatus::Healthy) => {
+                    self.dispatcher
+                        .borrow_mut()
+                        .disable_node(*node_id)
+                        .unwrap_or_else(|err| {
+                            log::error!("{}", err);
+                            panic!();
+                        });
+                }
+                _ => {}
+            },
         }
     }
 }
