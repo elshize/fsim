@@ -771,6 +771,7 @@ impl SimulationConfig {
             dispatch_overhead: self.dispatch_overhead,
             node_statuses,
         });
+        *sim.state.get_mut(broker_id).unwrap() = Some(broker);
 
         pb.set_length(query_events.len() as u64);
         pb.set_draw_delta(pb.length() / 10);
