@@ -103,6 +103,7 @@ impl TryFrom<Opt> for SimulationConfig {
             label: qrsim::SimulationLabel::default(),
             queries_path: opt.queries_path,
             query_events_path: opt.query_events_path,
+            failure_events_path: None,
             shard_scores_path: opt.shard_scores,
             estimates: None,
             query_output: opt.query_output,

@@ -136,6 +136,9 @@ pub struct SimulationConfig {
     /// Path to the file containing input query events.
     pub query_events_path: PathBuf,
 
+    /// Path to the file containing input query events.
+    pub failure_events_path: Option<PathBuf>,
+
     /// Path to the file containing Taily shard scores.
     pub shard_scores_path: Option<PathBuf>,
 
@@ -711,6 +714,8 @@ impl SimulationConfig {
         let estimates = self.estimates(queries.as_ref())?.map(Rc::new);
         let shard_probabilities = self.shard_probabilities()?;
         let query_events = read_query_events(&self.query_events_path)?;
+        let failure_events =
+            read_failure_events(self.failure_events_path.as_ref().map(|p| p.as_ref()))?;
 
         let broker_id = sim.state.insert::<Option<BrokerId>>(None);
 
@@ -757,7 +762,7 @@ impl SimulationConfig {
                 node: node_incoming_queues.iter().copied().collect(),
                 response: broker_response_queue,
             },
-            node_ids,
+            node_ids: node_ids.clone(),
             queries: Rc::clone(&queries),
             dispatcher: RefCell::new(dispatcher),
             query_log_id,
@@ -773,6 +778,14 @@ impl SimulationConfig {
             match event.event {
                 Event::Broker(e) => sim.schedule(event.time, broker, e),
                 Event::Node { .. } => eyre::bail!("invalid query event"),
+            }
+        }
+        for event in failure_events {
+            match event.event {
+                Event::Broker(_) => eyre::bail!("invalid query event"),
+                Event::Node { node_id, event: e } => {
+                    sim.schedule(event.time, node_ids[node_id.0], e)
+                }
             }
         }
 
@@ -799,5 +812,27 @@ pub fn read_query_events(file_path: &Path) -> eyre::Result<Vec<TimedEvent>> {
     } else {
         rmp_serde::from_read::<_, Vec<TimedEvent>>(file)
             .wrap_err("unable to parse query events in MsgPack format")
+    }
+}
+
+pub fn read_failure_events(file_path: Option<&Path>) -> eyre::Result<Vec<TimedEvent>> {
+    if let Some(file_path) = file_path {
+        let file = File::open(file_path).wrap_err_with(|| {
+            format!(
+                "unable to open failure events file: {}",
+                file_path.display()
+            )
+        })?;
+        if file_path.extension().map_or(false, |e| e == "json") {
+            serde_json::Deserializer::from_reader(file)
+                .into_iter()
+                .collect::<Result<Vec<TimedEvent>, _>>()
+                .wrap_err("unable to parse query events in JSON format")
+        } else {
+            rmp_serde::from_read::<_, Vec<TimedEvent>>(file)
+                .wrap_err("unable to parse query events in MsgPack format")
+        }
+    } else {
+        Ok(vec![])
     }
 }
