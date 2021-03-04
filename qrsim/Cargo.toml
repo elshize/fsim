@@ -12,6 +12,10 @@ path = "src/main.rs"
 name = "geninput"
 path = "src/geninput.rs"
 
+[[bin]]
+name = "genfailures"
+path = "src/genfailures.rs"
+
 [dependencies]
 rand = "0.7"
 rand_chacha = "0.3"
