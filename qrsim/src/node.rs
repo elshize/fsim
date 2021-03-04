@@ -287,6 +287,9 @@ impl Component for Node {
             Event::Idle | Event::NewRequest => {
                 log::trace!("Node is idle");
                 let status = *state.get(self.status).expect("missing node status");
+                if status == NodeStatus::Unresponsive {
+                    return;
+                }
                 if self.thread_pool(state).request_thread() {
                     if let Some(NodeQueueEntry {
                         request, broker, ..
