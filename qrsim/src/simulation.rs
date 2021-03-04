@@ -827,7 +827,7 @@ pub fn read_failure_events(file_path: Option<&Path>) -> eyre::Result<Vec<TimedEv
             serde_json::Deserializer::from_reader(file)
                 .into_iter()
                 .collect::<Result<Vec<TimedEvent>, _>>()
-                .wrap_err("unable to parse query events in JSON format")
+                .map_err(|e| eyre!("unable to parse query events in JSON format: {}", e))
         } else {
             rmp_serde::from_read::<_, Vec<TimedEvent>>(file)
                 .map_err(|e| eyre!("unable to parse query events in MsgPack format: {}", e))
