@@ -373,9 +373,10 @@ impl Component for Node {
                 // );
             }
             Event::Cure => {
-                // let new_status = NodeStatus::Healthy;
-                // let status = state.get_mut(self.status).expect("missing node status");
-                // let old_status = *status;
+                let new_status = NodeStatus::Healthy;
+                let status = state.get_mut(self.status).expect("missing node status");
+                let old_status = *status;
+                *status = new_status;
                 // let broker_id = state
                 //     .get(self.broker_id)
                 //     .expect("missing broker ID")
