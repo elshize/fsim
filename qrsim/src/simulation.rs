@@ -714,9 +714,9 @@ impl SimulationConfig {
         let estimates = self.estimates(queries.as_ref())?.map(Rc::new);
         let shard_probabilities = self.shard_probabilities()?;
         let query_events = read_query_events(&self.query_events_path)?;
-        // let failure_events =
-        //     read_failure_events(self.failure_events_path.as_ref().map(|p| p.as_ref()))?;
-        let failure_events: Vec<TimedEvent> = vec![];
+        let failure_events =
+            read_failure_events(self.failure_events_path.as_ref().map(|p| p.as_ref()))?;
+        // let failure_events: Vec<TimedEvent> = vec![];
 
         let broker_id = sim.state.insert::<Option<BrokerId>>(None);
 
