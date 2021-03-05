@@ -722,7 +722,7 @@ impl SimulationConfig {
             read_failure_events(self.failure_events_path.as_ref().map(|p| p.as_ref()))?;
         // let failure_events: Vec<TimedEvent> = vec![];
 
-        pb.set_message("Setting up simulation");
+        pb.set_message("Inserting broker ID");
 
         let broker_id = sim.state.insert::<Option<BrokerId>>(None);
 
