@@ -358,10 +358,10 @@ impl Component for Node {
                 let status = state.get_mut(self.status).expect("missing node status");
                 let old_status = *status;
                 *status = new_status;
-                // let broker_id = state
-                //     .get(self.broker_id)
-                //     .expect("missing broker ID")
-                //     .expect("broker ID hasn't been registered");
+                let broker_id = state
+                    .get(self.broker_id)
+                    .expect("missing broker ID")
+                    .expect("broker ID hasn't been registered");
                 // scheduler.schedule(
                 //     BROKER_NOTIFY_DELAY,
                 //     broker_id,
@@ -377,10 +377,10 @@ impl Component for Node {
                 let status = state.get_mut(self.status).expect("missing node status");
                 let old_status = *status;
                 *status = new_status;
-                // let broker_id = state
-                //     .get(self.broker_id)
-                //     .expect("missing broker ID")
-                //     .expect("broker ID hasn't been registered");
+                let broker_id = state
+                    .get(self.broker_id)
+                    .expect("missing broker ID")
+                    .expect("broker ID hasn't been registered");
                 // scheduler.schedule(
                 //     BROKER_NOTIFY_DELAY,
                 //     broker_id,
