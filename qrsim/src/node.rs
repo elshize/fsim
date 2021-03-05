@@ -354,10 +354,10 @@ impl Component for Node {
                 scheduler.schedule_now(self_id, Event::Idle);
             }
             Event::Injure(fraction) => {
-                // let new_status = NodeStatus::Injured(*fraction);
-                // let status = state.get_mut(self.status).expect("missing node status");
-                // let old_status = *status;
-                // *status = new_status;
+                let new_status = NodeStatus::Injured(*fraction);
+                let status = state.get_mut(self.status).expect("missing node status");
+                let old_status = *status;
+                *status = new_status;
                 // let broker_id = state
                 //     .get(self.broker_id)
                 //     .expect("missing broker ID")
