@@ -726,6 +726,8 @@ impl SimulationConfig {
 
         let broker_id = sim.state.insert::<Option<BrokerId>>(None);
 
+        pb.set_message("Creating queues");
+
         let node_incoming_queues: Vec<_> = (0..self.num_nodes)
             .map(|_| {
                 sim.add_queue(NodeQueue::unbounded(select_function(
@@ -740,6 +742,7 @@ impl SimulationConfig {
             .collect();
         let broker_response_queue = sim.add_queue(Fifo::default());
 
+        pb.set_message("Creating nodes");
         let thread_pools = self.node_thread_pools(&mut sim, node_incoming_queues.len());
         let node_ids = Self::nodes(
             &mut sim,
@@ -753,6 +756,8 @@ impl SimulationConfig {
         let responses_key = sim
             .state
             .insert(HashMap::<RequestId, ResponseStatus>::new());
+
+        pb.set_message("Creating dispatcher");
         let mut dispatcher = self.dispatcher(
             &node_incoming_queues,
             &queries,
@@ -764,6 +769,8 @@ impl SimulationConfig {
         for &node_id in &self.disabled_nodes {
             dispatcher.disable_node(node_id)?;
         }
+
+        pb.set_message("Creating broker");
         let broker = sim.add_component(Broker {
             queues: BrokerQueues {
                 node: node_incoming_queues.iter().copied().collect(),
@@ -780,8 +787,7 @@ impl SimulationConfig {
         });
         *sim.state.get_mut(broker_id).unwrap() = Some(broker);
 
-        pb.set_length(query_events.len() as u64);
-        pb.set_draw_delta(pb.length() / 10);
+        let len = query_events.len() as u64;
 
         pb.set_message("Scheduling query events");
         for event in query_events {
@@ -799,6 +805,9 @@ impl SimulationConfig {
                 }
             }
         }
+
+        pb.set_length(len);
+        pb.set_draw_delta(pb.length() / 10);
 
         run_events(&mut sim, query_log_id, &pb, message_type);
         drop(sim);
