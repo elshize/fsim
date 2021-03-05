@@ -4,6 +4,7 @@ use std::time::Duration;
 use clap::Clap;
 use eyre::{Result, WrapErr};
 use humantime::parse_duration;
+use ndarray::{arr2, Array2};
 use qrsim::NodeStatus;
 use rand_chacha::{
     rand_core::{RngCore, SeedableRng},
@@ -44,17 +45,24 @@ struct Opt {
 #[derive(Debug, Clone)]
 struct MarkovChain {
     state: NodeStatus,
-    transitions: [WeightedAliasIndex<f32>; 3],
+    transitions: [Vec<f64>; 3],
+    weights: [WeightedAliasIndex<f64>; 3],
     injured_fraction: f32,
 }
 
 impl MarkovChain {
-    fn new(transitions: [WeightedAliasIndex<f32>; 3], injured_fraction: f32) -> Self {
-        Self {
+    fn new(transitions: [Vec<f64>; 3], injured_fraction: f32) -> Result<Self> {
+        let weights = [
+            WeightedAliasIndex::new(transitions[0].clone())?,
+            WeightedAliasIndex::new(transitions[1].clone())?,
+            WeightedAliasIndex::new(transitions[2].clone())?,
+        ];
+        Ok(Self {
             state: NodeStatus::Healthy,
             transitions,
+            weights,
             injured_fraction,
-        }
+        })
     }
 
     const fn index(state: NodeStatus) -> usize {
@@ -66,7 +74,7 @@ impl MarkovChain {
     }
 
     fn next<R: RngCore>(&mut self, rng: &mut R) -> NodeStatus {
-        let distr = &self.transitions[Self::index(self.state)];
+        let distr = &self.weights[Self::index(self.state)];
         let next_state = match distr.sample(rng) {
             0 => NodeStatus::Healthy,
             1 => NodeStatus::Injured(self.injured_fraction),
@@ -75,6 +83,33 @@ impl MarkovChain {
         };
         self.state = next_state;
         next_state
+    }
+
+    fn steady_probabilities(&self) -> [f64; 3] {
+        let mut p = arr2(&[
+            [
+                self.transitions[0][0],
+                self.transitions[1][0],
+                self.transitions[2][0],
+            ],
+            [
+                self.transitions[0][1],
+                self.transitions[1][1],
+                self.transitions[2][1],
+            ],
+            [
+                self.transitions[0][2],
+                self.transitions[1][2],
+                self.transitions[2][2],
+            ],
+        ]);
+        println!("{:?}", p);
+        println!("{:?}", p.dot(&p));
+        while !(p.column(0) == p.column(1) && p.column(1) == p.column(2)) {
+            p = p.dot(&p);
+        }
+        let col = p.column(0);
+        [col[0], col[1], col[2]]
     }
 }
 
@@ -85,19 +120,21 @@ fn generate(opt: &Opt) -> Result<()> {
     } else {
         ChaChaRng::from_entropy()
     };
+    let chain = MarkovChain::new(
+        [
+            // vec![0.2, 0.8, 0.0],
+            // vec![0.4, 0.0, 0.6],
+            // vec![0.5, 0.5, 0.0],
+            vec![0.99, 0.01, 0.0],
+            vec![0.05, 0.0, 0.95],
+            vec![0.05, 0.95, 0.0],
+        ],
+        1.10,
+    )?;
+    println!("{:?}", chain.steady_probabilities());
     let mut time = INTERVAL;
     let mut status = NodeStatus::Healthy;
-    let mut chains = vec![
-        MarkovChain::new(
-            [
-                WeightedAliasIndex::new(vec![0.99, 0.01, 0.0])?,
-                WeightedAliasIndex::new(vec![1.0, 0.0, 0.0])?,
-                WeightedAliasIndex::new(vec![0.05, 0.95, 0.0])?,
-            ],
-            0.95,
-        );
-        opt.num_nodes
-    ];
+    let mut chains = vec![chain; opt.num_nodes];
     let mut events = Vec::<qrsim::TimedEvent>::new();
     while time < end_time {
         for (node_id, chain) in chains.iter_mut().enumerate() {
