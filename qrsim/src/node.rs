@@ -354,59 +354,59 @@ impl Component for Node {
                 scheduler.schedule_now(self_id, Event::Idle);
             }
             Event::Injure(fraction) => {
-                let new_status = NodeStatus::Injured(*fraction);
-                let status = state.get_mut(self.status).expect("missing node status");
-                let old_status = *status;
-                *status = new_status;
-                let broker_id = state
-                    .get(self.broker_id)
-                    .expect("missing broker ID")
-                    .expect("broker ID hasn't been registered");
-                scheduler.schedule(
-                    BROKER_NOTIFY_DELAY,
-                    broker_id,
-                    BrokerEvent::NodeStatusChanged {
-                        node_id: self.id,
-                        new_status,
-                        old_status,
-                    },
-                );
+                // let new_status = NodeStatus::Injured(*fraction);
+                // let status = state.get_mut(self.status).expect("missing node status");
+                // let old_status = *status;
+                // *status = new_status;
+                // let broker_id = state
+                //     .get(self.broker_id)
+                //     .expect("missing broker ID")
+                //     .expect("broker ID hasn't been registered");
+                // scheduler.schedule(
+                //     BROKER_NOTIFY_DELAY,
+                //     broker_id,
+                //     BrokerEvent::NodeStatusChanged {
+                //         node_id: self.id,
+                //         new_status,
+                //         old_status,
+                //     },
+                // );
             }
             Event::Cure => {
-                let new_status = NodeStatus::Healthy;
-                let status = state.get_mut(self.status).expect("missing node status");
-                let old_status = *status;
-                let broker_id = state
-                    .get(self.broker_id)
-                    .expect("missing broker ID")
-                    .expect("broker ID hasn't been registered");
-                scheduler.schedule(
-                    BROKER_NOTIFY_DELAY,
-                    broker_id,
-                    BrokerEvent::NodeStatusChanged {
-                        node_id: self.id,
-                        new_status,
-                        old_status,
-                    },
-                );
+                // let new_status = NodeStatus::Healthy;
+                // let status = state.get_mut(self.status).expect("missing node status");
+                // let old_status = *status;
+                // let broker_id = state
+                //     .get(self.broker_id)
+                //     .expect("missing broker ID")
+                //     .expect("broker ID hasn't been registered");
+                // scheduler.schedule(
+                //     BROKER_NOTIFY_DELAY,
+                //     broker_id,
+                //     BrokerEvent::NodeStatusChanged {
+                //         node_id: self.id,
+                //         new_status,
+                //         old_status,
+                //     },
+                // );
             }
             Event::Suspend => {
-                let new_status = NodeStatus::Unresponsive;
-                let status = state.get_mut(self.status).expect("missing node status");
-                let old_status = *status;
-                let broker_id = state
-                    .get(self.broker_id)
-                    .expect("missing broker ID")
-                    .expect("broker ID hasn't been registered");
-                scheduler.schedule(
-                    BROKER_NOTIFY_DELAY,
-                    broker_id,
-                    BrokerEvent::NodeStatusChanged {
-                        node_id: self.id,
-                        new_status,
-                        old_status,
-                    },
-                );
+                // let new_status = NodeStatus::Unresponsive;
+                // let status = state.get_mut(self.status).expect("missing node status");
+                // let old_status = *status;
+                // let broker_id = state
+                //     .get(self.broker_id)
+                //     .expect("missing broker ID")
+                //     .expect("broker ID hasn't been registered");
+                // scheduler.schedule(
+                //     BROKER_NOTIFY_DELAY,
+                //     broker_id,
+                //     BrokerEvent::NodeStatusChanged {
+                //         node_id: self.id,
+                //         new_status,
+                //         old_status,
+                //     },
+                // );
             }
         }
     }
