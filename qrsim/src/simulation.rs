@@ -711,12 +711,18 @@ impl SimulationConfig {
         );
 
         let queries = Rc::new(self.queries(&pb)?.queries);
+        pb.set_message("Loading estimates");
         let estimates = self.estimates(queries.as_ref())?.map(Rc::new);
+        pb.set_message("Loading shard probabilities");
         let shard_probabilities = self.shard_probabilities()?;
+        pb.set_message("Loading query events");
         let query_events = read_query_events(&self.query_events_path)?;
+        pb.set_message("Loading failure events");
         let failure_events =
             read_failure_events(self.failure_events_path.as_ref().map(|p| p.as_ref()))?;
         // let failure_events: Vec<TimedEvent> = vec![];
+
+        pb.set_message("Setting up simulation");
 
         let broker_id = sim.state.insert::<Option<BrokerId>>(None);
 
