@@ -362,15 +362,15 @@ impl Component for Node {
                     .get(self.broker_id)
                     .expect("missing broker ID")
                     .expect("broker ID hasn't been registered");
-                // scheduler.schedule(
-                //     BROKER_NOTIFY_DELAY,
-                //     broker_id,
-                //     BrokerEvent::NodeStatusChanged {
-                //         node_id: self.id,
-                //         new_status,
-                //         old_status,
-                //     },
-                // );
+                scheduler.schedule(
+                    BROKER_NOTIFY_DELAY,
+                    broker_id,
+                    BrokerEvent::NodeStatusChanged {
+                        node_id: self.id,
+                        new_status,
+                        old_status,
+                    },
+                );
             }
             Event::Cure => {
                 let new_status = NodeStatus::Healthy;
@@ -381,15 +381,15 @@ impl Component for Node {
                     .get(self.broker_id)
                     .expect("missing broker ID")
                     .expect("broker ID hasn't been registered");
-                // scheduler.schedule(
-                //     BROKER_NOTIFY_DELAY,
-                //     broker_id,
-                //     BrokerEvent::NodeStatusChanged {
-                //         node_id: self.id,
-                //         new_status,
-                //         old_status,
-                //     },
-                // );
+                scheduler.schedule(
+                    BROKER_NOTIFY_DELAY,
+                    broker_id,
+                    BrokerEvent::NodeStatusChanged {
+                        node_id: self.id,
+                        new_status,
+                        old_status,
+                    },
+                );
             }
             Event::Suspend => {
                 // let new_status = NodeStatus::Unresponsive;
