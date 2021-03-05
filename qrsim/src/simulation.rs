@@ -782,12 +782,15 @@ impl SimulationConfig {
 
         pb.set_length(query_events.len() as u64);
         pb.set_draw_delta(pb.length() / 10);
+
+        pb.set_message("Scheduling query events");
         for event in query_events {
             match event.event {
                 Event::Broker(e) => sim.schedule(event.time, broker, e),
                 Event::Node { .. } => eyre::bail!("invalid query event"),
             }
         }
+        pb.set_message("Scheduling failure events");
         for event in failure_events {
             match event.event {
                 Event::Broker(_) => eyre::bail!("invalid query event"),
