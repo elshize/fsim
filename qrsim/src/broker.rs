@@ -185,13 +185,7 @@ impl Component for Broker {
                     }
                 }
                 (NodeStatus::Unresponsive, NodeStatus::Healthy) => {
-                    self.dispatcher
-                        .borrow_mut()
-                        .disable_node(*node_id)
-                        .unwrap_or_else(|err| {
-                            log::error!("{}", err);
-                            panic!();
-                        });
+                    self.dispatcher.borrow_mut().enable_node(*node_id);
                 }
                 _ => {}
             },
