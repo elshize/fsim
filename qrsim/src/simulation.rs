@@ -583,11 +583,11 @@ impl SimulationConfig {
                 .collect_vec(),
         )
         .wrap_err("invavlid nodes config")?;
-        let weights = if let Some(probs) = shard_probabilities {
-            weights.dot(&Array2::from_diag(&Array1::from(probs)))
-        } else {
-            weights
-        };
+        // let weights = if let Some(probs) = shard_probabilities {
+        //     weights.dot(&Array2::from_diag(&Array1::from(probs)))
+        // } else {
+        //     weights
+        // };
         Ok(ProbabilisticDispatcher::adaptive(weights)?)
     }
 
