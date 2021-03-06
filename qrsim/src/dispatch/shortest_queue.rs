@@ -1,13 +1,15 @@
 use super::{Dispatch, NodeId, QueryId, ShardId, State};
-use crate::{NodeQueue, NodeQueueEntry, NodeThreadPool};
+use crate::{NodeQueue, NodeQueueEntry, NodeStatus, NodeThreadPool};
 
 use std::collections::HashSet;
 
+use ordered_float::OrderedFloat;
 use simrs::{Key, QueueId};
 
 /// Always selects the node with the fewer requests in the queue.
 pub struct ShortestQueueDispatch {
     node_queues: Vec<QueueId<NodeQueue<NodeQueueEntry>>>,
+    node_weights: Vec<f32>,
     shards: Vec<Vec<NodeId>>,
     disabled_nodes: HashSet<NodeId>,
     thread_pools: Vec<Key<NodeThreadPool>>,
@@ -21,27 +23,31 @@ impl ShortestQueueDispatch {
         node_queues: Vec<QueueId<NodeQueue<NodeQueueEntry>>>,
         thread_pools: Vec<Key<NodeThreadPool>>,
     ) -> Self {
+        let node_weights = vec![1.0; node_queues.len()];
         Self {
             shards: super::invert_nodes_to_shards(nodes),
             disabled_nodes: HashSet::new(),
             node_queues,
             thread_pools,
+            node_weights,
         }
     }
 
     fn select_node(&self, shard_id: ShardId, state: &State) -> NodeId {
         *self.shards[shard_id.0]
             .iter()
-            .filter(|n| !self.disabled_nodes.contains(n))
-            .min_by_key(|n| {
+            .zip(&self.node_weights)
+            .filter(|(n, _)| !self.disabled_nodes.contains(n))
+            .min_by_key(|(n, w)| {
                 let queue_len = state.len(self.node_queues[n.0]);
                 let active = state
                     .get(self.thread_pools[n.0])
                     .expect("unknown thread pool ID")
                     .num_active();
-                queue_len + active
+                OrderedFloat((queue_len + active) as f32 / **w)
             })
             .unwrap()
+            .0
     }
 }
 
@@ -67,5 +73,17 @@ impl Dispatch for ShortestQueueDispatch {
 
     fn enable_node(&mut self, node_id: NodeId) -> bool {
         self.disabled_nodes.remove(&node_id)
+    }
+
+    fn recompute(&mut self, node_statuses: &[Key<NodeStatus>], state: &State) {
+        self.node_weights = node_statuses
+            .iter()
+            .copied()
+            .map(|key| match state.get(key).expect("missing node status") {
+                NodeStatus::Healthy => 1.0,
+                NodeStatus::Injured(i) => *i,
+                NodeStatus::Unresponsive => 0.0,
+            })
+            .collect();
     }
 }

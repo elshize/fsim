@@ -1,14 +1,18 @@
-use super::{Dispatch, NodeId, ShardId, State};
-use crate::{NodeQueue, NodeQueueEntry, NodeThreadPool, Query, QueryEstimate, QueryId};
+use crate::{
+    Dispatch, NodeId, NodeQueue, NodeQueueEntry, NodeStatus, NodeThreadPool, QueryEstimate,
+    QueryId, ShardId,
+};
 
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use simrs::{Key, QueueId};
+use ordered_float::OrderedFloat;
+use simrs::{Key, QueueId, State};
 
 /// Always selects the node with the least load waiting in the queue.
 pub struct LeastLoadedDispatch {
     node_queues: Vec<QueueId<NodeQueue<NodeQueueEntry>>>,
+    node_weights: Vec<f32>,
     shards: Vec<Vec<NodeId>>,
     disabled_nodes: HashSet<NodeId>,
     estimates: Rc<Vec<QueryEstimate>>,
@@ -22,23 +26,20 @@ impl LeastLoadedDispatch {
         nodes: &[Vec<usize>],
         node_queues: Vec<QueueId<NodeQueue<NodeQueueEntry>>>,
         estimates: Rc<Vec<QueryEstimate>>,
-        queries: Rc<Vec<Query>>,
         thread_pools: Vec<Key<NodeThreadPool>>,
     ) -> Self {
+        let node_weights = vec![1.0; node_queues.len()];
         Self {
             shards: super::invert_nodes_to_shards(nodes),
             disabled_nodes: HashSet::new(),
             node_queues,
             estimates,
             thread_pools,
+            node_weights,
         }
     }
 
     fn query_time(&self, query_id: QueryId, shard_id: ShardId) -> u64 {
-        // self.queries
-        //     .get(query_id.0)
-        //     .expect("query out of bounds")
-        //     .retrieval_times[shard_id.0]
         self.estimates
             .get(query_id.0 - 1)
             .expect("query out of bounds")
@@ -49,8 +50,9 @@ impl LeastLoadedDispatch {
     fn select_node(&self, shard_id: ShardId, state: &State) -> NodeId {
         *self.shards[shard_id.0]
             .iter()
-            .filter(|n| !self.disabled_nodes.contains(n))
-            .min_by_key(|n| {
+            .zip(&self.node_weights)
+            .filter(|(n, _)| !self.disabled_nodes.contains(n))
+            .min_by_key(|(n, w)| {
                 let running = state
                     .get(self.thread_pools[n.0])
                     .expect("unknown thread pool ID")
@@ -63,10 +65,10 @@ impl LeastLoadedDispatch {
                     .iter()
                     .map(|msg| self.query_time(msg.request.query_id(), msg.request.shard_id()))
                     .sum::<u64>();
-                //waiting
-                running as u64 + waiting
+                OrderedFloat((running as u64 + waiting) as f32 / **w)
             })
             .unwrap()
+            .0
     }
 }
 
@@ -92,5 +94,17 @@ impl Dispatch for LeastLoadedDispatch {
 
     fn enable_node(&mut self, node_id: NodeId) -> bool {
         self.disabled_nodes.remove(&node_id)
+    }
+
+    fn recompute(&mut self, node_statuses: &[Key<NodeStatus>], state: &State) {
+        self.node_weights = node_statuses
+            .iter()
+            .copied()
+            .map(|key| match state.get(key).expect("missing node status") {
+                NodeStatus::Healthy => 1.0,
+                NodeStatus::Injured(i) => *i,
+                NodeStatus::Unresponsive => 0.0,
+            })
+            .collect();
     }
 }

@@ -42,6 +42,7 @@ pub enum Event {
         old_status: NodeStatus,
         new_status: NodeStatus,
     },
+    RecomputePolicy,
 }
 
 /// Information about received and dropped responses to a request.
@@ -104,6 +105,9 @@ pub struct Broker {
 
     /// List of current statuses of nodes.
     pub node_statuses: Vec<Key<NodeStatus>>,
+
+    /// Whether to recompute policies on node status changes.
+    pub recompute_policies: bool,
 }
 
 impl Component for Broker {
@@ -187,8 +191,18 @@ impl Component for Broker {
                 (NodeStatus::Unresponsive, NodeStatus::Healthy) => {
                     self.dispatcher.borrow_mut().enable_node(*node_id);
                 }
-                _ => {}
+                _ => {
+                    if self.recompute_policies {
+                        let time = self.dispatcher.borrow().recompute_delay();
+                        scheduler.schedule(time, self_id, Event::RecomputePolicy);
+                    }
+                }
             },
+            Event::RecomputePolicy => {
+                self.dispatcher
+                    .borrow_mut()
+                    .recompute(&self.node_statuses, &state);
+            }
         }
     }
 }

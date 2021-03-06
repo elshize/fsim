@@ -1,7 +1,9 @@
-use crate::{NodeId, QueryId, ShardId};
+use crate::{NodeId, NodeStatus, QueryId, ShardId};
+
+use std::time::Duration;
 
 use itertools::Itertools;
-use simrs::State;
+use simrs::{Key, State};
 
 pub mod dummy;
 pub mod dynamic;
@@ -37,6 +39,14 @@ pub trait Dispatch {
 
     /// Enables `node_id` if it was previously disabled. Returns `true` if the node was disabled.
     fn enable_node(&mut self, node_id: NodeId) -> bool;
+
+    /// Recompute the policy based on the current state.
+    fn recompute(&mut self, _: &[Key<NodeStatus>], _: &State) {}
+
+    /// Returns the time needed to recompute the policy.
+    fn recompute_delay(&self) -> Duration {
+        Duration::default()
+    }
 }
 
 fn invert_nodes_to_shards(nodes: &[Vec<usize>]) -> Vec<Vec<NodeId>> {

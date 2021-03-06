@@ -1,8 +1,9 @@
-use super::{Dispatch, NodeId, ShardId, State};
-use crate::{NodeQueue, NodeQueueEntry, NodeThreadPool, Query, QueryEstimate, QueryId};
+use super::{Dispatch, NodeId, NodeStatus, ShardId, State};
+use crate::{NodeQueue, NodeQueueEntry, NodeThreadPool, QueryEstimate, QueryId};
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Duration;
 
 use eyre::{Result, WrapErr};
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
@@ -433,6 +434,28 @@ impl Dispatch for ProbabilisticDispatcher {
                 log::error!("{:#}", e);
                 panic!("{}", msg);
             })
+    }
+
+    fn recompute(&mut self, node_statuses: &[Key<NodeStatus>], state: &State) {
+        if let Some(weight_matrix) = self.weight_matrix.as_mut() {
+            weight_matrix.nodes = node_statuses
+                .iter()
+                .copied()
+                .map(|key| match state.get(key).expect("missing node status") {
+                    NodeStatus::Healthy => 1.0,
+                    NodeStatus::Injured(i) => *i,
+                    NodeStatus::Unresponsive => 0.0,
+                })
+                .collect();
+            let probabilities = optimization::LpOptimizer.optimize(weight_matrix.weights().view());
+            self.weights = probabilities_to_weights(probabilities.view());
+            self.shards = calc_distributions(&self.weights)
+                .unwrap_or_else(|e| panic!("invalid distribution: {}", e));
+        }
+    }
+
+    fn recompute_delay(&self) -> Duration {
+        Duration::from_millis(10)
     }
 }
 

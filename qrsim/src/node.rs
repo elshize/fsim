@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use simrs::{Component, ComponentId, Fifo, Key, Queue, QueueId, Scheduler, State};
 
-const BROKER_NOTIFY_DELAY: Duration = Duration::from_millis(20);
+const BROKER_NOTIFY_DELAY: Duration = Duration::from_millis(10);
 
 /// The state of a node.
 #[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize)]

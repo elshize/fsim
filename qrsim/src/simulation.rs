@@ -181,6 +181,9 @@ pub struct SimulationConfig {
 
     /// Dispatch overhead.
     pub dispatch_overhead: Duration,
+
+    /// Whether to recompile policies on node status changes.
+    pub recompute_policies: bool,
 }
 
 /// Metadata object containing file paths for [`CachedQueries`].
@@ -660,7 +663,6 @@ impl SimulationConfig {
                 &self.assignment.nodes,
                 Vec::from(node_queues),
                 Rc::clone(estimates.ok_or_else(error_msg)?),
-                Rc::clone(queries),
                 Vec::from(thread_pools),
             ))),
             DispatcherOption::OptPlus => Ok(Box::new(OptPlusDispatch::new(
@@ -784,6 +786,7 @@ impl SimulationConfig {
             selective: self.selective,
             dispatch_overhead: self.dispatch_overhead,
             node_statuses,
+            recompute_policies: self.recompute_policies,
         });
         *sim.state.get_mut(broker_id).unwrap() = Some(broker);
 

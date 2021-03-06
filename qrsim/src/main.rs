@@ -118,6 +118,7 @@ impl TryFrom<Opt> for SimulationConfig {
             selective: None,
             shard_probabilities: None,
             dispatch_overhead: std::time::Duration::default(),
+            recompute_policies: false,
         })
     }
 }
