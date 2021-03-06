@@ -48,6 +48,9 @@ struct Opt {
 
     #[structopt(short, long, default_value = "3")]
     replicas: u32,
+
+    #[structopt(long)]
+    shard_probabilities: Option<PathBuf>,
 }
 
 impl Opt {
@@ -210,6 +213,10 @@ fn assign(opt: &Opt) -> Result<()> {
         .loads(shard_loads.clone())
         .replicas(repeat(opt.replicas).take(num_shards).collect())
         .progress_bar(progress_bar);
+    if let Some(probabilities) = &opt.shard_probabilities {
+        let probabilities: Vec<f32> = serde_json::from_reader(File::open(probabilities)?)?;
+        builder.probabilities(probabilities.into_iter().collect());
+    }
     let mut rng = ChaChaRng::from_entropy();
     let (assignment, _) = builder.assign(
         &mut rng,
