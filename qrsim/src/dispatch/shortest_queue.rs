@@ -44,7 +44,7 @@ impl ShortestQueueDispatch {
                     .get(self.thread_pools[n.0])
                     .expect("unknown thread pool ID")
                     .num_active();
-                OrderedFloat((queue_len + active) as f32 / **w)
+                OrderedFloat((queue_len + active) as f32 * **w)
             })
             .unwrap()
             .0

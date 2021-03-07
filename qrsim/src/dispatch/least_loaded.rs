@@ -65,7 +65,7 @@ impl LeastLoadedDispatch {
                     .iter()
                     .map(|msg| self.query_time(msg.request.query_id(), msg.request.shard_id()))
                     .sum::<u64>();
-                OrderedFloat((running as u64 + waiting) as f32 / **w)
+                OrderedFloat((running as u64 + waiting) as f32 * **w)
             })
             .unwrap()
             .0
