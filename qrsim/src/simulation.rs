@@ -184,6 +184,9 @@ pub struct SimulationConfig {
 
     /// Whether to recompile policies on node status changes.
     pub recompute_policies: bool,
+
+    /// The delay of precomputing the probabilistic policy.
+    pub probabilistic_recompute_delay: Duration,
 }
 
 /// Metadata object containing file paths for [`CachedQueries`].
@@ -572,6 +575,7 @@ impl SimulationConfig {
     fn optimized_probabilistic_dispatcher(
         &self,
         shard_probabilities: Option<Vec<f32>>,
+        recompute_delay: Duration,
     ) -> eyre::Result<ProbabilisticDispatcher> {
         let weights = Array2::from_shape_vec(
             (self.num_nodes, self.num_shards),
@@ -588,16 +592,18 @@ impl SimulationConfig {
         } else {
             weights
         };
-        Ok(ProbabilisticDispatcher::adaptive(weights)?)
+        Ok(ProbabilisticDispatcher::adaptive(weights)?.with_recompute_delay(recompute_delay))
     }
 
     fn boxed_optimized_probabilistic_dispatcher(
         &self,
         shard_probabilities: Option<Vec<f32>>,
+        recompute_delay: Duration,
     ) -> eyre::Result<Box<dyn Dispatch>> {
-        Ok(Box::new(
-            self.optimized_probabilistic_dispatcher(shard_probabilities)?,
-        ))
+        Ok(Box::new(self.optimized_probabilistic_dispatcher(
+            shard_probabilities,
+            recompute_delay,
+        )?))
     }
 
     #[allow(clippy::cast_precision_loss)]
@@ -635,6 +641,7 @@ impl SimulationConfig {
         thread_pools: &[Key<NodeThreadPool>],
         shard_probabilities: Option<Vec<f32>>,
         clock: simrs::ClockRef,
+        probabilistic_recompute_delay: Duration,
     ) -> eyre::Result<Box<dyn Dispatch>> {
         use rand_chacha::rand_core::SeedableRng;
         let error_msg = || eyre::eyre!("least loaded dispatch needs estimates");
@@ -642,16 +649,20 @@ impl SimulationConfig {
             DispatcherOption::RoundRobin => {
                 Ok(Box::new(RoundRobinDispatcher::new(&self.assignment.nodes)))
             }
-            DispatcherOption::Probabilistic => {
-                self.boxed_optimized_probabilistic_dispatcher(shard_probabilities)
-            }
+            DispatcherOption::Probabilistic => self.boxed_optimized_probabilistic_dispatcher(
+                shard_probabilities,
+                probabilistic_recompute_delay,
+            ),
             DispatcherOption::UltraOptimized => Ok(Box::new(
-                self.optimized_probabilistic_dispatcher(shard_probabilities)?
-                    .with_load_info(crate::dispatch::probability::Load {
-                        queues: Vec::from(node_queues),
-                        estimates: Rc::clone(estimates.ok_or_else(error_msg)?),
-                        thread_pools: Vec::from(thread_pools),
-                    }),
+                self.optimized_probabilistic_dispatcher(
+                    shard_probabilities,
+                    probabilistic_recompute_delay,
+                )?
+                .with_load_info(crate::dispatch::probability::Load {
+                    queues: Vec::from(node_queues),
+                    estimates: Rc::clone(estimates.ok_or_else(error_msg)?),
+                    thread_pools: Vec::from(thread_pools),
+                }),
             )),
             DispatcherOption::Uniform => self.uniform_probabilistic_dispatcher(),
             DispatcherOption::ShortestQueue => Ok(Box::new(ShortestQueueDispatch::new(
@@ -671,7 +682,10 @@ impl SimulationConfig {
                 Rc::clone(estimates.ok_or_else(error_msg)?),
                 Rc::clone(queries),
                 Vec::from(thread_pools),
-                self.optimized_probabilistic_dispatcher(shard_probabilities)?,
+                self.optimized_probabilistic_dispatcher(
+                    shard_probabilities,
+                    probabilistic_recompute_delay,
+                )?,
                 0.875,
             ))),
             DispatcherOption::Dynamic => Ok(Box::new(DynamicDispatch::new(
@@ -767,6 +781,7 @@ impl SimulationConfig {
             &thread_pools,
             shard_probabilities,
             sim.scheduler.clock(),
+            self.probabilistic_recompute_delay,
         )?;
         for &node_id in &self.disabled_nodes {
             dispatcher.disable_node(node_id)?;

@@ -119,6 +119,7 @@ impl TryFrom<Opt> for SimulationConfig {
             shard_probabilities: None,
             dispatch_overhead: std::time::Duration::default(),
             recompute_policies: false,
+            probabilistic_recompute_delay: std::time::Duration::from_millis(0),
         })
     }
 }

@@ -76,6 +76,7 @@ pub struct ProbabilisticDispatcher {
     rng: RefCell<ChaChaRng>,
     weight_matrix: Option<WeightMatrix>,
     load: Option<Load>,
+    recompute_delay: Duration,
 }
 
 pub struct Load {
@@ -212,6 +213,7 @@ impl ProbabilisticDispatcher {
             weights,
             weight_matrix: None,
             load: None,
+            recompute_delay: Duration::from_millis(10),
         })
     }
 
@@ -245,6 +247,13 @@ impl ProbabilisticDispatcher {
         let mut dispatcher = Self::with_rng(probabilities.view(), rng)?;
         dispatcher.weight_matrix = Some(WeightMatrix::new(weight_matrix));
         Ok(dispatcher)
+    }
+
+    pub fn with_recompute_delay(self, delay: Duration) -> Self {
+        Self {
+            recompute_delay: delay,
+            ..self
+        }
     }
 
     pub fn with_load_info(self, load: Load) -> Self {
@@ -455,7 +464,7 @@ impl Dispatch for ProbabilisticDispatcher {
     }
 
     fn recompute_delay(&self) -> Duration {
-        Duration::from_millis(10)
+        self.recompute_delay
     }
 }
 
