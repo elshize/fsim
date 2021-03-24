@@ -50,7 +50,7 @@ pub trait Dispatch {
 }
 
 fn invert_nodes_to_shards(nodes: &[Vec<usize>]) -> Vec<Vec<NodeId>> {
-    nodes
+    let map = nodes
         .iter()
         .enumerate()
         .flat_map(|(node_id, shards)| {
@@ -58,8 +58,13 @@ fn invert_nodes_to_shards(nodes: &[Vec<usize>]) -> Vec<Vec<NodeId>> {
                 .iter()
                 .map(move |shard_id| (*shard_id, NodeId::from(node_id)))
         })
-        .into_group_map()
-        .into_iter()
+        .into_group_map();
+    assert!(map.get(&0).is_some(), "min shard ID must be 0");
+    assert!(
+        map.get(&(map.len() - 1)).is_some(),
+        "max shard ID must be len - 1"
+    );
+    map.into_iter()
         .map(|(_, assigned_nodes)| assigned_nodes)
         .collect()
 }
