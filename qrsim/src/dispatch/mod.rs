@@ -50,7 +50,7 @@ pub trait Dispatch {
 }
 
 fn invert_nodes_to_shards(nodes: &[Vec<usize>]) -> Vec<Vec<NodeId>> {
-    let map = nodes
+    let mut map = nodes
         .iter()
         .enumerate()
         .flat_map(|(node_id, shards)| {
@@ -58,7 +58,10 @@ fn invert_nodes_to_shards(nodes: &[Vec<usize>]) -> Vec<Vec<NodeId>> {
                 .iter()
                 .map(move |shard_id| (*shard_id, NodeId::from(node_id)))
         })
-        .into_group_map();
+        .into_group_map()
+        .into_iter()
+        .collect_vec();
+    map.sort();
     map.into_iter()
         .enumerate()
         .map(|(idx, (shard_id, assigned_nodes))| {
