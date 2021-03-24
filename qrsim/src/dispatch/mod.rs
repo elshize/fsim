@@ -59,12 +59,11 @@ fn invert_nodes_to_shards(nodes: &[Vec<usize>]) -> Vec<Vec<NodeId>> {
                 .map(move |shard_id| (*shard_id, NodeId::from(node_id)))
         })
         .into_group_map();
-    assert!(map.get(&0).is_some(), "min shard ID must be 0");
-    assert!(
-        map.get(&(map.len() - 1)).is_some(),
-        "max shard ID must be len - 1"
-    );
     map.into_iter()
-        .map(|(_, assigned_nodes)| assigned_nodes)
+        .enumerate()
+        .map(|(idx, (shard_id, assigned_nodes))| {
+            assert_eq!(idx, shard_id, "missing shard {}", idx);
+            assigned_nodes
+        })
         .collect()
 }
