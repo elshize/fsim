@@ -6,6 +6,7 @@ use crate::{
 use std::collections::HashSet;
 use std::rc::Rc;
 
+use itertools::izip;
 use ordered_float::OrderedFloat;
 use simrs::{Key, QueueId, State};
 
@@ -47,12 +48,15 @@ impl LeastLoadedDispatch {
     }
 
     #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
-    fn select_node(&self, shard_id: ShardId, state: &State) -> NodeId {
-        *self.shards[shard_id.0]
-            .iter()
-            .zip(&self.node_weights)
-            .filter(|(n, _)| !self.disabled_nodes.contains(n))
-            .min_by_key(|(n, w)| {
+    fn select_node(
+        &self,
+        shard_id: ShardId,
+        state: &State,
+        current_loads: &[u64],
+    ) -> (NodeId, u64) {
+        let (node_id, _, load) = izip!(&self.shards[shard_id.0], &self.node_weights, current_loads)
+            .filter(|(n, _, _)| !self.disabled_nodes.contains(n))
+            .min_by_key(|(n, w, c)| {
                 let running = state
                     .get(self.thread_pools[n.0])
                     .expect("unknown thread pool ID")
@@ -65,19 +69,27 @@ impl LeastLoadedDispatch {
                     .iter()
                     .map(|msg| self.query_time(msg.request.query_id(), msg.request.shard_id()))
                     .sum::<u64>();
-                OrderedFloat((running as u64 + waiting) as f32 * **w)
+                OrderedFloat((running as u64 + waiting + **c) as f32 * **w)
             })
-            .unwrap()
-            .0
+            .unwrap();
+        (*node_id, *load)
     }
 }
 
 impl Dispatch for LeastLoadedDispatch {
     fn dispatch(&self, _: QueryId, shards: &[ShardId], state: &State) -> Vec<(ShardId, NodeId)> {
-        shards
+        let mut current_loads = vec![0_u64; self.num_nodes()];
+        let mut selection = shards
             .iter()
-            .map(|&shard_id| (shard_id, self.select_node(shard_id, &state)))
-            .collect()
+            .copied()
+            .map(|sid| (sid, NodeId(0)))
+            .collect::<Vec<_>>();
+        for (shard_id, node_id) in &mut selection {
+            let (nid, load) = self.select_node(*shard_id, &state, &current_loads);
+            current_loads[nid.0] += load;
+            *node_id = nid;
+        }
+        selection
     }
 
     fn num_shards(&self) -> usize {

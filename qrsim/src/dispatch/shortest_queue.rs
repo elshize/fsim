@@ -3,6 +3,7 @@ use crate::{NodeQueue, NodeQueueEntry, NodeStatus, NodeThreadPool};
 
 use std::collections::HashSet;
 
+use itertools::izip;
 use ordered_float::OrderedFloat;
 use simrs::{Key, QueueId};
 
@@ -33,18 +34,16 @@ impl ShortestQueueDispatch {
         }
     }
 
-    fn select_node(&self, shard_id: ShardId, state: &State) -> NodeId {
-        *self.shards[shard_id.0]
-            .iter()
-            .zip(&self.node_weights)
-            .filter(|(n, _)| !self.disabled_nodes.contains(n))
-            .min_by_key(|(n, w)| {
+    fn select_node(&self, shard_id: ShardId, state: &State, current_loads: &[usize]) -> NodeId {
+        *izip!(&self.shards[shard_id.0], &self.node_weights, current_loads)
+            .filter(|(n, _, _)| !self.disabled_nodes.contains(n))
+            .min_by_key(|(n, w, c)| {
                 let queue_len = state.len(self.node_queues[n.0]);
                 let active = state
                     .get(self.thread_pools[n.0])
                     .expect("unknown thread pool ID")
                     .num_active();
-                OrderedFloat((queue_len + active) as f32 * **w)
+                OrderedFloat((queue_len + active + **c) as f32 * **w)
             })
             .unwrap()
             .0
@@ -53,10 +52,17 @@ impl ShortestQueueDispatch {
 
 impl Dispatch for ShortestQueueDispatch {
     fn dispatch(&self, _: QueryId, shards: &[ShardId], state: &State) -> Vec<(ShardId, NodeId)> {
-        shards
+        let mut current_loads = vec![0; self.num_nodes()];
+        let mut selection = shards
             .iter()
-            .map(|&shard_id| (shard_id, self.select_node(shard_id, &state)))
-            .collect()
+            .copied()
+            .map(|sid| (sid, NodeId(0)))
+            .collect::<Vec<_>>();
+        for (shard_id, node_id) in &mut selection {
+            *node_id = self.select_node(*shard_id, &state, &current_loads);
+            current_loads[node_id.0] += 1;
+        }
+        selection
     }
 
     fn num_shards(&self) -> usize {
