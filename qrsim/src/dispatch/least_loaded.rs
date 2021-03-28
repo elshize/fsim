@@ -1,4 +1,3 @@
-use super::random_enabled_node_from;
 use crate::{
     Dispatch, NodeId, NodeQueue, NodeQueueEntry, NodeStatus, NodeThreadPool, QueryEstimate,
     QueryId, ShardId,
@@ -8,8 +7,6 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use itertools::izip;
-use ordered_float::OrderedFloat;
 use rand_chacha::{rand_core::SeedableRng, ChaChaRng};
 use simrs::{Key, QueueId, State};
 
@@ -52,52 +49,59 @@ impl LeastLoadedDispatch {
             .shard_estimate(shard_id)
     }
 
-    #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
-    fn select_node(
-        &self,
-        shard_id: ShardId,
-        state: &State,
-        current_loads: &[u64],
-        query_id: QueryId,
-    ) -> (NodeId, u64) {
-        let node_loads = izip!(&self.shards[shard_id.0], &self.node_weights, current_loads)
-            .filter(|(n, _, _)| !self.disabled_nodes.contains(n))
-            .map(|(n, w, c)| {
-                let running = state
-                    .get(self.thread_pools[n.0])
-                    .expect("unknown thread pool ID")
-                    .running_threads()
-                    .iter()
-                    .map(|t| t.estimated.as_micros())
-                    .sum::<u128>();
-                let waiting = state
-                    .queue(self.node_queues[n.0])
-                    .iter()
-                    .map(|msg| self.query_time(msg.request.query_id(), msg.request.shard_id()))
-                    .sum::<u64>();
-                let load = running as u64 + waiting + *c;
-                (n, load as f32 * *w)
+    fn calc_loads(&self, state: &State) -> Vec<f32> {
+        (0..self.num_nodes())
+            .map(NodeId)
+            .zip(&self.node_weights)
+            .map(|(node_id, weight)| {
+                if self.disabled_nodes.contains(&node_id) {
+                    let running = state
+                        .get(self.thread_pools[node_id.0])
+                        .expect("unknown thread pool ID")
+                        .running_threads()
+                        .iter()
+                        .map(|t| t.estimated.as_micros())
+                        .sum::<u128>();
+                    let waiting = state
+                        .queue(self.node_queues[node_id.0])
+                        .iter()
+                        .map(|msg| self.query_time(msg.request.query_id(), msg.request.shard_id()))
+                        .sum::<u64>();
+                    let load = running as u64 + waiting;
+                    load as f32 * *weight
+                } else {
+                    f32::MAX
+                }
             })
-            .collect::<Vec<_>>();
-        let min = node_loads
-            .iter()
-            .min_by_key(|(_, load)| OrderedFloat(*load))
-            .unwrap()
-            .1;
-        let min_nodes = node_loads
-            .into_iter()
-            .filter_map(|(n, l)| if l == min { Some(*n) } else { None })
-            .collect::<Vec<_>>();
-        let node_id = if min_nodes.len() == 1 {
-            *min_nodes.first().unwrap()
+            .collect()
+    }
+
+    #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
+    fn select_node(&self, shard_id: ShardId, loads: &[f32]) -> NodeId {
+        use rand::Rng;
+        let mut min_load = f32::MAX;
+        let mut min_node = NodeId(0);
+        let mut min_count = 0;
+        for &node_id in &self.shards[shard_id.0] {
+            let load = loads[node_id.0];
+            if load < min_load {
+                min_load = load;
+                min_node = node_id;
+                min_count = 1;
+            } else if load == min_load {
+                min_count += 1;
+            }
+        }
+        if min_count == 1 {
+            min_node
         } else {
-            random_enabled_node_from(
-                &min_nodes,
-                &mut *self.rng.borrow_mut(),
-                &self.disabled_nodes,
-            )
-        };
-        (node_id, self.query_time(query_id, shard_id))
+            let selected: usize = self.rng.borrow_mut().gen_range(0..min_count);
+            self.shards[shard_id.0]
+                .iter()
+                .copied()
+                .nth(selected)
+                .unwrap()
+        }
     }
 }
 
@@ -108,15 +112,15 @@ impl Dispatch for LeastLoadedDispatch {
         shards: &[ShardId],
         state: &State,
     ) -> Vec<(ShardId, NodeId)> {
-        let mut current_loads = vec![0_u64; self.num_nodes()];
+        let mut loads = self.calc_loads(state);
         let mut selection = shards
             .iter()
             .copied()
             .map(|sid| (sid, NodeId(0)))
             .collect::<Vec<_>>();
         for (shard_id, node_id) in &mut selection {
-            let (nid, load) = self.select_node(*shard_id, &state, &current_loads, query_id);
-            current_loads[nid.0] += load;
+            let nid = self.select_node(*shard_id, &loads);
+            loads[nid.0] += self.query_time(query_id, *shard_id) as f32 * self.node_weights[nid.0];
             *node_id = nid;
         }
         selection

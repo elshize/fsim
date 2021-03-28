@@ -74,34 +74,6 @@ fn invert_nodes_to_shards(nodes: &[Vec<usize>]) -> Vec<Vec<NodeId>> {
         .collect()
 }
 
-fn random_enabled_node_from(
-    nodes: &[NodeId],
-    rng: &mut ChaChaRng,
-    disabled_nodes: &HashSet<NodeId>,
-) -> NodeId {
-    let weights = nodes
-        .iter()
-        .map(|n| if disabled_nodes.contains(n) { 0.0 } else { 1.0 });
-    let distr = WeightedAliasIndex::new(weights.collect()).expect("invalid distr");
-    NodeId(distr.sample(rng))
-}
-
-fn random_enabled_node(
-    num_nodes: usize,
-    rng: &mut ChaChaRng,
-    disabled_nodes: &HashSet<NodeId>,
-) -> NodeId {
-    let weights = (0..num_nodes).map(|n| {
-        if disabled_nodes.contains(&NodeId(n)) {
-            0.0
-        } else {
-            1.0
-        }
-    });
-    let distr = WeightedAliasIndex::new(weights.collect()).expect("invalid distr");
-    NodeId(distr.sample(rng))
-}
-
 #[cfg(test)]
 mod test {
     use super::*;

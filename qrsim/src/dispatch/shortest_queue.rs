@@ -89,16 +89,15 @@ impl ShortestQueueDispatch {
 
 impl Dispatch for ShortestQueueDispatch {
     fn dispatch(&self, _: QueryId, shards: &[ShardId], state: &State) -> Vec<(ShardId, NodeId)> {
-        let mut current_loads = vec![0; self.num_nodes()];
         let mut selection = shards
             .iter()
             .copied()
             .map(|sid| (sid, NodeId(0)))
             .collect::<Vec<_>>();
-        let loads = self.calc_loads(state);
+        let mut loads = self.calc_loads(state);
         for (shard_id, node_id) in &mut selection {
             *node_id = self.select_node(*shard_id, &loads);
-            current_loads[node_id.0] += 1;
+            loads[node_id.0] += self.node_weights[node_id.0];
         }
         selection
     }
