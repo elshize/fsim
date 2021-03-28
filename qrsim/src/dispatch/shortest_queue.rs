@@ -50,7 +50,7 @@ impl ShortestQueueDispatch {
             .map(NodeId)
             .zip(&self.node_weights)
             .map(|(node_id, weight)| {
-                if self.disabled_nodes.contains(&node_id) {
+                if !self.disabled_nodes.contains(&node_id) {
                     self.calc_length(state, node_id) as f32 * *weight
                 } else {
                     f32::MAX
@@ -68,7 +68,7 @@ impl ShortestQueueDispatch {
         if nodes.len() == 1 {
             return nodes[0];
         }
-        for &node_id in nodes {
+        for &node_id in nodes.iter().filter(|n| !self.disabled_nodes.contains(n)) {
             let load = loads[node_id.0];
             if load < min_load {
                 min_load = load;
