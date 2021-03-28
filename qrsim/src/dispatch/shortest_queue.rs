@@ -1,11 +1,9 @@
-use super::{random_enabled_node_from, Dispatch, NodeId, QueryId, ShardId, State};
+use super::{Dispatch, NodeId, QueryId, ShardId, State};
 use crate::{NodeQueue, NodeQueueEntry, NodeStatus, NodeThreadPool};
 
 use std::cell::RefCell;
 use std::collections::HashSet;
 
-use itertools::izip;
-use ordered_float::OrderedFloat;
 use rand_chacha::{rand_core::SeedableRng, ChaChaRng};
 use simrs::{Key, QueueId};
 
@@ -38,41 +36,53 @@ impl ShortestQueueDispatch {
         }
     }
 
-    fn select_node(&self, shard_id: ShardId, state: &State, current_loads: &[usize]) -> NodeId {
-        let (node_id, load) = izip!(&self.shards[shard_id.0], &self.node_weights, current_loads)
-            .filter(|(n, _, _)| !self.disabled_nodes.contains(n))
-            .map(|(n, w, c)| {
-                let queue_len = state.len(self.node_queues[n.0]);
-                let active = state
-                    .get(self.thread_pools[n.0])
-                    .expect("unknown thread pool ID")
-                    .num_active();
-                (n, (queue_len + active + *c) as f32 * *w)
+    fn calc_length(&self, state: &State, node_id: NodeId) -> usize {
+        let queue_len = state.len(self.node_queues[node_id.0]);
+        let active = state
+            .get(self.thread_pools[node_id.0])
+            .expect("unknown thread pool ID")
+            .num_active();
+        queue_len + active
+    }
+
+    fn calc_loads(&self, state: &State) -> Vec<f32> {
+        (0..self.num_nodes())
+            .map(NodeId)
+            .zip(&self.node_weights)
+            .map(|(node_id, weight)| {
+                if self.disabled_nodes.contains(&node_id) {
+                    self.calc_length(state, node_id) as f32 * *weight
+                } else {
+                    f32::MAX
+                }
             })
-            .min_by_key(|(_, load)| OrderedFloat(*load))
-            .unwrap();
-        if load == 0.0 {
-            let nodes = izip!(&self.shards[shard_id.0], &self.node_weights, current_loads)
-                .filter_map(|(n, _, c)| {
-                    if self.disabled_nodes.contains(n) {
-                        None
-                    } else {
-                        let queue_len = state.len(self.node_queues[n.0]);
-                        let active = state
-                            .get(self.thread_pools[n.0])
-                            .expect("unknown thread pool ID")
-                            .num_active();
-                        if queue_len + active + *c == 0 {
-                            None
-                        } else {
-                            Some(*n)
-                        }
-                    }
-                })
-                .collect::<Vec<_>>();
-            random_enabled_node_from(&nodes, &mut *self.rng.borrow_mut(), &self.disabled_nodes)
+            .collect()
+    }
+
+    fn select_node(&self, shard_id: ShardId, loads: &[f32]) -> NodeId {
+        use rand::Rng;
+        let mut min_load = f32::MAX;
+        let mut min_node = NodeId(0);
+        let mut min_count = 0;
+        for &node_id in &self.shards[shard_id.0] {
+            let load = loads[node_id.0];
+            if load < min_load {
+                min_load = load;
+                min_node = node_id;
+                min_count = 1;
+            } else if load == min_load {
+                min_count += 1;
+            }
+        }
+        if min_count == 1 {
+            min_node
         } else {
-            *node_id
+            let selected: usize = self.rng.borrow_mut().gen_range(0..min_count);
+            self.shards[shard_id.0]
+                .iter()
+                .copied()
+                .nth(selected)
+                .unwrap()
         }
     }
 }
@@ -85,8 +95,9 @@ impl Dispatch for ShortestQueueDispatch {
             .copied()
             .map(|sid| (sid, NodeId(0)))
             .collect::<Vec<_>>();
+        let loads = self.calc_loads(state);
         for (shard_id, node_id) in &mut selection {
-            *node_id = self.select_node(*shard_id, &state, &current_loads);
+            *node_id = self.select_node(*shard_id, &loads);
             current_loads[node_id.0] += 1;
         }
         selection
