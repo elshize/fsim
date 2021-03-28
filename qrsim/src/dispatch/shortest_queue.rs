@@ -101,7 +101,7 @@ impl Dispatch for ShortestQueueDispatch {
         let mut loads = self.calc_loads(state);
         for (shard_id, node_id) in &mut selection {
             *node_id = self.select_node(*shard_id, &loads);
-            // loads[node_id.0] += self.node_weights[node_id.0];
+            loads[node_id.0] += self.node_weights[node_id.0];
         }
         selection
     }
@@ -128,7 +128,7 @@ impl Dispatch for ShortestQueueDispatch {
             .copied()
             .map(|key| match state.get(key).expect("missing node status") {
                 NodeStatus::Healthy => 1.0,
-                NodeStatus::Injured(i) => *i,
+                NodeStatus::Injured(i) => 1.0 / *i,
                 NodeStatus::Unresponsive => 0.0,
             })
             .collect();
