@@ -1,8 +1,11 @@
 use crate::{NodeId, NodeStatus, QueryId, ShardId};
 
+use std::collections::HashSet;
 use std::time::Duration;
 
 use itertools::Itertools;
+use rand_chacha::ChaChaRng;
+use rand_distr::{Distribution, WeightedAliasIndex};
 use simrs::{Key, State};
 
 pub mod dummy;
@@ -69,6 +72,22 @@ fn invert_nodes_to_shards(nodes: &[Vec<usize>]) -> Vec<Vec<NodeId>> {
             assigned_nodes
         })
         .collect()
+}
+
+fn random_enabled_node(
+    num_nodes: usize,
+    rng: &mut ChaChaRng,
+    disabled_nodes: &HashSet<NodeId>,
+) -> NodeId {
+    let weights = (0..num_nodes).map(|n| {
+        if disabled_nodes.contains(&NodeId(n)) {
+            0.0
+        } else {
+            1.0
+        }
+    });
+    let distr = WeightedAliasIndex::new(weights.collect()).expect("invalid distr");
+    NodeId(distr.sample(rng))
 }
 
 #[cfg(test)]
