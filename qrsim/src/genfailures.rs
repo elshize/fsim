@@ -48,7 +48,6 @@ struct Opt {
     #[clap(short, long)]
     health: f64,
 
-    /// Fraction of normal time an injured machine returns results in. Should be > 1.
     #[clap(short, long)]
     injury: f64,
 }

@@ -128,7 +128,10 @@ impl Dispatch for ShortestQueueDispatch {
             .copied()
             .map(|key| match state.get(key).expect("missing node status") {
                 NodeStatus::Healthy => 1.0,
-                NodeStatus::Injured(i) => 1.0 / *i,
+                NodeStatus::Injured(i) => {
+                    assert!(*i > 1.0);
+                    *i
+                }
                 NodeStatus::Unresponsive => 0.0,
             })
             .collect();
