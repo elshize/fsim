@@ -78,17 +78,16 @@ impl ShortestQueueDispatch {
                 min_count += 1;
             }
         }
-        min_node
-        // if min_count == 1 {
-        //     min_node
-        // } else {
-        //     let selected: usize = self.rng.borrow_mut().gen_range(0..min_count);
-        //     self.shards[shard_id.0]
-        //         .iter()
-        //         .copied()
-        //         .nth(selected)
-        //         .unwrap()
-        // }
+        if min_count == 1 {
+            min_node
+        } else {
+            let selected: usize = self.rng.borrow_mut().gen_range(0..min_count);
+            self.shards[shard_id.0]
+                .iter()
+                .copied()
+                .nth(selected)
+                .unwrap()
+        }
     }
 }
 
@@ -102,7 +101,7 @@ impl Dispatch for ShortestQueueDispatch {
         let mut loads = self.calc_loads(state);
         for (shard_id, node_id) in &mut selection {
             *node_id = self.select_node(*shard_id, &loads);
-            loads[node_id.0] += self.node_weights[node_id.0];
+            // loads[node_id.0] += self.node_weights[node_id.0];
         }
         selection
     }
