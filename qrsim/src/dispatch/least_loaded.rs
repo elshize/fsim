@@ -54,7 +54,7 @@ impl LeastLoadedDispatch {
             .map(NodeId)
             .zip(&self.node_weights)
             .map(|(node_id, weight)| {
-                if self.disabled_nodes.contains(&node_id) {
+                if !self.disabled_nodes.contains(&node_id) {
                     let running = state
                         .get(self.thread_pools[node_id.0])
                         .expect("unknown thread pool ID")
@@ -86,7 +86,7 @@ impl LeastLoadedDispatch {
         if nodes.len() == 1 {
             return nodes[0];
         }
-        for &node_id in nodes {
+        for &node_id in nodes.iter().filter(|n| !self.disabled_nodes.contains(n)) {
             let load = loads[node_id.0];
             if load < min_load {
                 min_load = load;
@@ -124,7 +124,7 @@ impl Dispatch for LeastLoadedDispatch {
             .collect::<Vec<_>>();
         for (shard_id, node_id) in &mut selection {
             let nid = self.select_node(*shard_id, &loads);
-            //loads[nid.0] += self.query_time(query_id, *shard_id) as f32 * self.node_weights[nid.0];
+            loads[nid.0] += self.query_time(query_id, *shard_id) as f32 * self.node_weights[nid.0];
             *node_id = nid;
         }
         selection
