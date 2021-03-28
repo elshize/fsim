@@ -54,7 +54,7 @@ impl ShortestQueueDispatch {
         if load == 0.0 {
             let nodes = izip!(&self.shards[shard_id.0], &self.node_weights, current_loads)
                 .filter_map(|(n, _, c)| {
-                    if !self.disabled_nodes.contains(n) {
+                    if self.disabled_nodes.contains(n) {
                         None
                     } else {
                         let queue_len = state.len(self.node_queues[n.0]);
