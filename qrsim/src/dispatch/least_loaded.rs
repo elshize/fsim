@@ -1,13 +1,16 @@
+use super::random_enabled_node;
 use crate::{
     Dispatch, NodeId, NodeQueue, NodeQueueEntry, NodeStatus, NodeThreadPool, QueryEstimate,
     QueryId, ShardId,
 };
 
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
 
 use itertools::izip;
 use ordered_float::OrderedFloat;
+use rand_chacha::{rand_core::SeedableRng, ChaChaRng};
 use simrs::{Key, QueueId, State};
 
 /// Always selects the node with the least load waiting in the queue.
@@ -18,6 +21,7 @@ pub struct LeastLoadedDispatch {
     disabled_nodes: HashSet<NodeId>,
     estimates: Rc<Vec<QueryEstimate>>,
     thread_pools: Vec<Key<NodeThreadPool>>,
+    rng: RefCell<ChaChaRng>,
 }
 
 impl LeastLoadedDispatch {
@@ -37,6 +41,7 @@ impl LeastLoadedDispatch {
             estimates,
             thread_pools,
             node_weights,
+            rng: RefCell::new(ChaChaRng::from_entropy()),
         }
     }
 
@@ -53,10 +58,11 @@ impl LeastLoadedDispatch {
         shard_id: ShardId,
         state: &State,
         current_loads: &[u64],
+        query_id: QueryId,
     ) -> (NodeId, u64) {
-        let (node_id, _, load) = izip!(&self.shards[shard_id.0], &self.node_weights, current_loads)
+        let (node_id, load) = izip!(&self.shards[shard_id.0], &self.node_weights, current_loads)
             .filter(|(n, _, _)| !self.disabled_nodes.contains(n))
-            .min_by_key(|(n, w, c)| {
+            .map(|(n, w, c)| {
                 let running = state
                     .get(self.thread_pools[n.0])
                     .expect("unknown thread pool ID")
@@ -69,15 +75,31 @@ impl LeastLoadedDispatch {
                     .iter()
                     .map(|msg| self.query_time(msg.request.query_id(), msg.request.shard_id()))
                     .sum::<u64>();
-                OrderedFloat((running as u64 + waiting + **c) as f32 * **w)
+                let load = running as u64 + waiting + *c;
+                (n, load as f32 * *w)
             })
+            .min_by_key(|(_, load)| OrderedFloat(*load))
             .unwrap();
-        (*node_id, *load)
+        let node_id = if load == 0.0 {
+            random_enabled_node(
+                self.num_nodes(),
+                &mut *self.rng.borrow_mut(),
+                &self.disabled_nodes,
+            )
+        } else {
+            *node_id
+        };
+        (node_id, self.query_time(query_id, shard_id))
     }
 }
 
 impl Dispatch for LeastLoadedDispatch {
-    fn dispatch(&self, _: QueryId, shards: &[ShardId], state: &State) -> Vec<(ShardId, NodeId)> {
+    fn dispatch(
+        &self,
+        query_id: QueryId,
+        shards: &[ShardId],
+        state: &State,
+    ) -> Vec<(ShardId, NodeId)> {
         let mut current_loads = vec![0_u64; self.num_nodes()];
         let mut selection = shards
             .iter()
@@ -85,7 +107,7 @@ impl Dispatch for LeastLoadedDispatch {
             .map(|sid| (sid, NodeId(0)))
             .collect::<Vec<_>>();
         for (shard_id, node_id) in &mut selection {
-            let (nid, load) = self.select_node(*shard_id, &state, &current_loads);
+            let (nid, load) = self.select_node(*shard_id, &state, &current_loads, query_id);
             current_loads[nid.0] += load;
             *node_id = nid;
         }
