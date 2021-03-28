@@ -82,7 +82,11 @@ impl LeastLoadedDispatch {
         let mut min_load = f32::MAX;
         let mut min_node = NodeId(0);
         let mut min_count = 0;
-        for &node_id in &self.shards[shard_id.0] {
+        let nodes = &self.shards[shard_id.0];
+        if nodes.len() == 1 {
+            return nodes[0];
+        }
+        for &node_id in nodes {
             let load = loads[node_id.0];
             if load < min_load {
                 min_load = load;
