@@ -1,4 +1,4 @@
-use super::{random_enabled_node, Dispatch, NodeId, QueryId, ShardId, State};
+use super::{random_enabled_node_from, Dispatch, NodeId, QueryId, ShardId, State};
 use crate::{NodeQueue, NodeQueueEntry, NodeStatus, NodeThreadPool};
 
 use std::cell::RefCell;
@@ -39,7 +39,7 @@ impl ShortestQueueDispatch {
     }
 
     fn select_node(&self, shard_id: ShardId, state: &State, current_loads: &[usize]) -> NodeId {
-        let (node_id, load) = izip!(&self.shards[shard_id.0], &self.node_weights, current_loads)
+        let node_loads = izip!(&self.shards[shard_id.0], &self.node_weights, current_loads)
             .filter(|(n, _, _)| !self.disabled_nodes.contains(n))
             .map(|(n, w, c)| {
                 let queue_len = state.len(self.node_queues[n.0]);
@@ -49,16 +49,24 @@ impl ShortestQueueDispatch {
                     .num_active();
                 (n, (queue_len + active + *c) as f32 * *w)
             })
+            .collect::<Vec<_>>();
+        let min = node_loads
+            .iter()
             .min_by_key(|(_, load)| OrderedFloat(*load))
-            .unwrap();
-        if load == 0.0 {
-            random_enabled_node(
-                self.num_nodes(),
+            .unwrap()
+            .1;
+        let min_nodes = node_loads
+            .into_iter()
+            .filter_map(|(n, l)| if l == min { Some(*n) } else { None })
+            .collect::<Vec<_>>();
+        if min_nodes.len() == 1 {
+            min_nodes[0]
+        } else {
+            random_enabled_node_from(
+                &min_nodes,
                 &mut *self.rng.borrow_mut(),
                 &self.disabled_nodes,
             )
-        } else {
-            *node_id
         }
     }
 }
