@@ -124,7 +124,7 @@ impl Dispatch for LeastLoadedDispatch {
             .collect::<Vec<_>>();
         for (shard_id, node_id) in &mut selection {
             let nid = self.select_node(*shard_id, &loads);
-            loads[nid.0] += self.query_time(query_id, *shard_id) as f32 * self.node_weights[nid.0];
+            //loads[nid.0] += self.query_time(query_id, *shard_id) as f32 * self.node_weights[nid.0];
             *node_id = nid;
         }
         selection
