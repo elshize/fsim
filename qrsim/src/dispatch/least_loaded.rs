@@ -96,16 +96,17 @@ impl LeastLoadedDispatch {
                 min_count += 1;
             }
         }
-        if min_count == 1 {
-            min_node
-        } else {
-            let selected: usize = self.rng.borrow_mut().gen_range(0..min_count);
-            self.shards[shard_id.0]
-                .iter()
-                .copied()
-                .nth(selected)
-                .unwrap()
-        }
+        min_node
+        // if min_count == 1 {
+        //     min_node
+        // } else {
+        //     let selected: usize = self.rng.borrow_mut().gen_range(0..min_count);
+        //     self.shards[shard_id.0]
+        //         .iter()
+        //         .copied()
+        //         .nth(selected)
+        //         .unwrap()
+        // }
     }
 }
 
