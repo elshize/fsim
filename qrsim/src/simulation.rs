@@ -1,3 +1,4 @@
+use crate::dispatch::least_loaded::ActiveRequestPolicy;
 use crate::{
     run_events, write_from_channel, BoxedSelect, Broker, BrokerId, BrokerQueues, CostSelect,
     Dispatch, DynamicDispatch, Event, FifoSelect, LeastLoadedDispatch, MessageType, Node,
@@ -50,6 +51,9 @@ pub enum DispatcherOption {
 
     /// See [`LeastLoadedDispatch`].
     LeastLoaded,
+
+    /// See [`LeastLoadedDispatch`].
+    LeastLoadedPlus,
 
     /// See [`OptPlusDispatch`].
     OptPlus,
@@ -483,12 +487,6 @@ impl SimulationConfig {
                     })
                     .collect()
                 }
-                // EstimatesConfig::Clairvoyant => Ok(Some(
-                //     queries
-                //         .iter()
-                //         .map(|q| Explicit(q.retrieval_times.clone()))
-                //         .collect(),
-                // )),
                 EstimatesConfig::Explicit(path) => {
                     let file = File::open(path).wrap_err_with(|| {
                         eyre::eyre!("unable to read explicit estimates from {}", path.display())
@@ -675,6 +673,16 @@ impl SimulationConfig {
                 Vec::from(node_queues),
                 Rc::clone(estimates.ok_or_else(error_msg)?),
                 Vec::from(thread_pools),
+                ActiveRequestPolicy::OnlyEstimate,
+                clock,
+            ))),
+            DispatcherOption::LeastLoadedPlus => Ok(Box::new(LeastLoadedDispatch::new(
+                &self.assignment.nodes,
+                Vec::from(node_queues),
+                Rc::clone(estimates.ok_or_else(error_msg)?),
+                Vec::from(thread_pools),
+                ActiveRequestPolicy::ConsiderElapsed,
+                clock,
             ))),
             DispatcherOption::OptPlus => Ok(Box::new(OptPlusDispatch::new(
                 &self.assignment.nodes,

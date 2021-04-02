@@ -8,7 +8,13 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use rand_chacha::{rand_core::SeedableRng, ChaChaRng};
-use simrs::{Key, QueueId, State};
+use simrs::{ClockRef, Key, QueueId, State};
+
+#[derive(Debug, Clone, Copy)]
+pub enum ActiveRequestPolicy {
+    OnlyEstimate,
+    ConsiderElapsed,
+}
 
 /// Always selects the node with the least load waiting in the queue.
 pub struct LeastLoadedDispatch {
@@ -19,6 +25,8 @@ pub struct LeastLoadedDispatch {
     estimates: Rc<Vec<QueryEstimate>>,
     thread_pools: Vec<Key<NodeThreadPool>>,
     rng: RefCell<ChaChaRng>,
+    active_request_policy: ActiveRequestPolicy,
+    clock: ClockRef,
 }
 
 impl LeastLoadedDispatch {
@@ -29,6 +37,8 @@ impl LeastLoadedDispatch {
         node_queues: Vec<QueueId<NodeQueue<NodeQueueEntry>>>,
         estimates: Rc<Vec<QueryEstimate>>,
         thread_pools: Vec<Key<NodeThreadPool>>,
+        active_request_policy: ActiveRequestPolicy,
+        clock: ClockRef,
     ) -> Self {
         let node_weights = vec![1.0; node_queues.len()];
         Self {
@@ -39,6 +49,8 @@ impl LeastLoadedDispatch {
             thread_pools,
             node_weights,
             rng: RefCell::new(ChaChaRng::from_entropy()),
+            active_request_policy,
+            clock,
         }
     }
 
@@ -49,25 +61,47 @@ impl LeastLoadedDispatch {
             .shard_estimate(shard_id)
     }
 
+    fn running_load(&self, state: &State, node_id: NodeId) -> u64 {
+        match self.active_request_policy {
+            ActiveRequestPolicy::OnlyEstimate => state
+                .get(self.thread_pools[node_id.0])
+                .expect("unknown thread pool ID")
+                .running_threads()
+                .iter()
+                .map(|t| t.estimated.as_micros())
+                .sum::<u128>() as u64,
+            ActiveRequestPolicy::ConsiderElapsed => {
+                let now = self.clock.time().as_micros();
+                state
+                    .get(self.thread_pools[node_id.0])
+                    .expect("unknown thread pool ID")
+                    .running_threads()
+                    .iter()
+                    .map(|t| {
+                        let elapsed = now - t.start.as_micros();
+                        elapsed.checked_sub(t.estimated.as_micros()).unwrap_or(0)
+                    })
+                    .sum::<u128>() as u64
+            }
+        }
+    }
+
+    fn waiting_load(&self, state: &State, node_id: NodeId) -> u64 {
+        state
+            .queue(self.node_queues[node_id.0])
+            .iter()
+            .map(|msg| self.query_time(msg.request.query_id(), msg.request.shard_id()))
+            .sum()
+    }
+
     fn calc_loads(&self, state: &State) -> Vec<f32> {
         (0..self.num_nodes())
             .map(NodeId)
             .zip(&self.node_weights)
             .map(|(node_id, weight)| {
                 if !self.disabled_nodes.contains(&node_id) {
-                    let running = state
-                        .get(self.thread_pools[node_id.0])
-                        .expect("unknown thread pool ID")
-                        .running_threads()
-                        .iter()
-                        .map(|t| t.estimated.as_micros())
-                        .sum::<u128>();
-                    let waiting = state
-                        .queue(self.node_queues[node_id.0])
-                        .iter()
-                        .map(|msg| self.query_time(msg.request.query_id(), msg.request.shard_id()))
-                        .sum::<u64>();
-                    let load = running as u64 + waiting;
+                    let load =
+                        self.running_load(state, node_id) + self.waiting_load(state, node_id);
                     load as f32 * *weight
                 } else {
                     f32::MAX
