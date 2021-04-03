@@ -15,6 +15,7 @@ pub struct ShortestQueueDispatch {
     disabled_nodes: HashSet<NodeId>,
     thread_pools: Vec<Key<NodeThreadPool>>,
     rng: RefCell<ChaChaRng>,
+    include_running: bool,
 }
 
 impl ShortestQueueDispatch {
@@ -24,6 +25,7 @@ impl ShortestQueueDispatch {
         nodes: &[Vec<usize>],
         node_queues: Vec<QueueId<NodeQueue<NodeQueueEntry>>>,
         thread_pools: Vec<Key<NodeThreadPool>>,
+        include_running: bool,
     ) -> Self {
         let node_weights = vec![1.0; node_queues.len()];
         Self {
@@ -33,15 +35,20 @@ impl ShortestQueueDispatch {
             thread_pools,
             node_weights,
             rng: RefCell::new(ChaChaRng::from_entropy()),
+            include_running,
         }
     }
 
     fn calc_length(&self, state: &State, node_id: NodeId) -> usize {
         let queue_len = state.len(self.node_queues[node_id.0]);
-        let active = state
-            .get(self.thread_pools[node_id.0])
-            .expect("unknown thread pool ID")
-            .num_active();
+        let active = if self.include_running {
+            state
+                .get(self.thread_pools[node_id.0])
+                .expect("unknown thread pool ID")
+                .num_active()
+        } else {
+            0
+        };
         queue_len + active
     }
 

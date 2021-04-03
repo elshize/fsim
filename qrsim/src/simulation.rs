@@ -49,6 +49,9 @@ pub enum DispatcherOption {
     /// See [`ShortestQueueDispatch`].
     ShortestQueue,
 
+    /// See [`ShortestQueueDispatch`].
+    ShortestQueueWaiting,
+
     /// See [`LeastLoadedDispatch`].
     LeastLoadedWaiting,
 
@@ -670,6 +673,13 @@ impl SimulationConfig {
                 &self.assignment.nodes,
                 Vec::from(node_queues),
                 Vec::from(thread_pools),
+                true,
+            ))),
+            DispatcherOption::ShortestQueueWaiting => Ok(Box::new(ShortestQueueDispatch::new(
+                &self.assignment.nodes,
+                Vec::from(node_queues),
+                Vec::from(thread_pools),
+                false,
             ))),
             DispatcherOption::LeastLoaded => Ok(Box::new(LeastLoadedDispatch::new(
                 &self.assignment.nodes,
