@@ -50,6 +50,9 @@ pub enum DispatcherOption {
     ShortestQueue,
 
     /// See [`LeastLoadedDispatch`].
+    LeastLoadedWaiting,
+
+    /// See [`LeastLoadedDispatch`].
     LeastLoaded,
 
     /// See [`LeastLoadedDispatch`].
@@ -682,6 +685,14 @@ impl SimulationConfig {
                 Rc::clone(estimates.ok_or_else(error_msg)?),
                 Vec::from(thread_pools),
                 ActiveRequestPolicy::ConsiderElapsed,
+                clock,
+            ))),
+            DispatcherOption::LeastLoadedWaiting => Ok(Box::new(LeastLoadedDispatch::new(
+                &self.assignment.nodes,
+                Vec::from(node_queues),
+                Rc::clone(estimates.ok_or_else(error_msg)?),
+                Vec::from(thread_pools),
+                ActiveRequestPolicy::Ignore,
                 clock,
             ))),
             DispatcherOption::OptPlus => Ok(Box::new(OptPlusDispatch::new(

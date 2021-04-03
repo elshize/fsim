@@ -12,6 +12,7 @@ use simrs::{ClockRef, Key, QueueId, State};
 
 #[derive(Debug, Clone, Copy)]
 pub enum ActiveRequestPolicy {
+    Ignore,
     OnlyEstimate,
     ConsiderElapsed,
 }
@@ -83,6 +84,7 @@ impl LeastLoadedDispatch {
                     })
                     .sum::<u128>() as u64
             }
+            ActiveRequestPolicy::Ignore => 0,
         }
     }
 
