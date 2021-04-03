@@ -79,7 +79,7 @@ impl LeastLoadedDispatch {
                     .iter()
                     .map(|t| {
                         let elapsed = now - t.start.as_micros();
-                        elapsed.checked_sub(t.estimated.as_micros()).unwrap_or(0)
+                        t.estimated.as_micros().checked_sub(elapsed).unwrap_or(0)
                     })
                     .sum::<u128>() as u64
             }
