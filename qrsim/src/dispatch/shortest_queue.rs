@@ -92,6 +92,7 @@ impl ShortestQueueDispatch {
             self.shards[shard_id.0]
                 .iter()
                 .copied()
+                .filter(|n| loads[n.0] == min_load)
                 .nth(selected)
                 .unwrap()
         }
